@@ -59,6 +59,11 @@ public func napiRegisterModule(
     //
     // Plus the run loop pump:
     //   _drainMainRunLoop
+    //
+    // Properties on the exported object:
+    //   activated: String? (last activated bundleId, or null)
+    //   hide: (function, alias for hideNonAllowedApps)
+    //   apps: { listInstalled() } (sub-namespace for app queries)
 
     return ComputerUseBindings.createObject(env: env ?? OpaquePointer(bitPattern: 0)!)
     #else

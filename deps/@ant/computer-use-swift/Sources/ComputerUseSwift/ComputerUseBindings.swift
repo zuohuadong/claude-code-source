@@ -347,6 +347,54 @@ enum ComputerUseBindings {
         _drainMainRunLoopImpl()
     }
 
+
+    // MARK: - Chicago aliases
+    // Internal codename aliases for the same methods. The consuming
+    // application references these names in its server definition.
+
+    /// Alias for captureExcluding (Chicago codename).
+    static func chicagoCaptureExcluding(allowedBundleIds: [String], displayId: UInt32? = nil) async -> ScreenshotResult? {
+        await captureExcluding(allowedBundleIds: allowedBundleIds, displayId: displayId)
+    }
+
+    /// Alias for captureRegion (Chicago codename).
+    static func chicagoCaptureRegion(
+        allowedBundleIds: [String],
+        regionX: CGFloat, regionY: CGFloat, regionW: CGFloat, regionH: CGFloat,
+        outputWidth: Int, outputHeight: Int,
+        displayId: UInt32? = nil
+    ) async -> ZoomResult? {
+        await captureRegion(
+            allowedBundleIds: allowedBundleIds,
+            regionX: regionX, regionY: regionY, regionW: regionW, regionH: regionH,
+            outputWidth: outputWidth, outputHeight: outputHeight,
+            displayId: displayId
+        )
+    }
+
+    /// Alias for listInstalled (Chicago codename).
+    static func chicagoListInstalled() async throws -> [InstalledApp] {
+        try await listInstalled()
+    }
+
+    /// Alias for prepareDisplay (Chicago codename).
+    static func chicagoPrepareDisplay(allowedBundleIds: [String], hostBundleId: String) -> PrepareDisplayResult {
+        prepareDisplay(allowedBundleIds: allowedBundleIds, hostBundleId: hostBundleId)
+    }
+
+    /// Alias for resolvePrepareCapture (Chicago codename).
+    static func chicagoResolvePrepareCapture(
+        allowedBundleIds: [String],
+        hostBundleId: String,
+        preferredDisplayId: UInt32? = nil
+    ) async -> ResolvePrepareCaptureResult? {
+        await resolvePrepareCapture(
+            allowedBundleIds: allowedBundleIds,
+            hostBundleId: hostBundleId,
+            preferredDisplayId: preferredDisplayId
+        )
+    }
+
     // MARK: - Private helpers
 
     /// Exempt bundle IDs that should never be hidden.
