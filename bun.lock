@@ -42,6 +42,7 @@
         "@opentelemetry/semantic-conventions": "^1.40.0",
         "@smithy/core": "^3.23.13",
         "@smithy/node-http-handler": "^4.5.1",
+        "@zavora-ai/computer-use-mcp": "^6.2.0",
         "ajv": "^8.18.0",
         "asciichart": "^1.5.25",
         "auto-bind": "^5.0.1",
@@ -496,6 +497,8 @@
     "@typespec/ts-http-runtime": ["@typespec/ts-http-runtime@0.3.4", "", { "dependencies": { "http-proxy-agent": "^7.0.0", "https-proxy-agent": "^7.0.0", "tslib": "^2.6.2" } }, "sha512-CI0NhTrz4EBaa0U+HaaUZrJhPoso8sG7ZFya8uQoBA57fjzrjRSv87ekCjLZOFExN+gXE/z0xuN2QfH4H2HrLQ=="],
 
     "@xmldom/xmldom": ["@xmldom/xmldom@0.8.12", "", {}, "sha512-9k/gHF6n/pAi/9tqr3m3aqkuiNosYTurLLUtc7xQ9sxB/wm7WPygCv8GYa6mS0fLJEHhqMC1ATYhz++U/lRHqg=="],
+
+    "@zavora-ai/computer-use-mcp": ["@zavora-ai/computer-use-mcp@6.2.0", "", { "dependencies": { "@modelcontextprotocol/sdk": "^1.12.1", "zod": "^4.0.0" }, "os": [ "linux", "win32", "darwin", ], "bin": { "computer-use-mcp": "dist/server.js" } }, "sha512-vnd3BIKpIxm1IrtrT1n51vNt6FjiXwFt2jDO3B9Imxd+8qdk+bTEpbAfV9aZzHQQ1E/NaabEB3pFVvloufcMqw=="],
 
     "accepts": ["accepts@2.0.0", "", { "dependencies": { "mime-types": "^3.0.0", "negotiator": "^1.0.0" } }, "sha512-5cvg6CtKwfgdmVqY1WIiXKc3Q1bkRqGLi+2W/6ao+6Y7gu/RCwRuAhGEzh5B4KlszSuTLgZYuqFqo5bImjNKng=="],
 

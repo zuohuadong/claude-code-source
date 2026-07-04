@@ -2,7 +2,7 @@
  * Windows (win32) backend for @ant/computer-use-input.
  *
  * Priority chain:
- *   1. @ant/computer-use-native (Rust NAPI — SendInput + MOUSEEVENTF_ABSOLUTE)
+ *   1. @ant/computer-use-native → @zavora-ai/computer-use-mcp (.node from npm)
  *   2. computer-use-input.node (legacy NAPI build)
  *   3. PowerShell + Win32 P/Invoke fallback
  */
@@ -10,96 +10,85 @@
 import { execFileSync } from 'child_process'
 import path from 'path'
 import type { FrontmostAppInfo, InputBackend } from '../types.js'
-
-import type * as Native from '../../computer-use-native/index.js'
+import { loadNative, isNativeAvailable, type NativeModule } from '@ant/computer-use-native'
 
 // ---------------------------------------------------------------------------
 // Try native modules
 // ---------------------------------------------------------------------------
 
-let nativeInput: any = null
-let nativeExec: typeof Native | null = null
+let native: NativeModule | null = null
 
-// 1. Try @ant/computer-use-native (full cross-platform native)
-try {
-  const nativePath =
-    process.env.COMPUTER_USE_NATIVE_NODE_PATH ??
-    path.resolve(import.meta.dir, '../../../computer-use-native/prebuilds/computer-use-native.node')
-  nativeInput = require(nativePath)
-  nativeExec = nativeInput
-} catch {
-  // computer-use-native not available
+// 1. Try @ant/computer-use-native (loads from @zavora-ai/computer-use-mcp npm)
+if (isNativeAvailable()) {
+  try {
+    native = loadNative()
+  } catch {
+    native = null
+  }
 }
 
 // 2. Try legacy computer-use-input.node
-if (!nativeInput) {
+let legacyInput: any = null
+if (!native) {
   try {
     const legacyPath =
       process.env.COMPUTER_USE_INPUT_NODE_PATH ??
       path.resolve(import.meta.dir, '../../prebuilds/computer-use-input.node')
-    nativeInput = require(legacyPath)
+    legacyInput = require(legacyPath)
   } catch {
-    // Legacy addon not available either
+    // Legacy addon not available
   }
 }
 
-if (nativeInput && nativeExec?.mouseMove) {
-  // ── Full native backend (@ant/computer-use-native) ──
-  module.exports = createNativeBackend(nativeExec)
-} else if (nativeInput && (nativeInput.moveMouse || nativeInput.move_mouse)) {
-  // ── Legacy NAPI backend (computer-use-input.node) ──
+if (native) {
+  module.exports = createNativeBackend(native)
+} else if (legacyInput && (legacyInput.moveMouse || legacyInput.move_mouse)) {
   module.exports = {
-    moveMouse: nativeInput.moveMouse ?? nativeInput.move_mouse,
-    key: nativeInput.key,
-    keys: nativeInput.keys,
-    typeText: nativeInput.typeText ?? nativeInput.type_text,
-    mouseLocation: nativeInput.mouseLocation ?? nativeInput.mouse_location,
-    mouseButton: nativeInput.mouseButton ?? nativeInput.mouse_button,
-    mouseScroll: nativeInput.mouseScroll ?? nativeInput.mouse_scroll,
-    getFrontmostAppInfo: nativeInput.getFrontmostAppInfo ?? nativeInput.get_frontmost_app_info,
+    moveMouse: legacyInput.moveMouse ?? legacyInput.move_mouse,
+    key: legacyInput.key,
+    keys: legacyInput.keys,
+    typeText: legacyInput.typeText ?? legacyInput.type_text,
+    mouseLocation: legacyInput.mouseLocation ?? legacyInput.mouse_location,
+    mouseButton: legacyInput.mouseButton ?? legacyInput.mouse_button,
+    mouseScroll: legacyInput.mouseScroll ?? legacyInput.mouse_scroll,
+    getFrontmostAppInfo: legacyInput.getFrontmostAppInfo ?? legacyInput.get_frontmost_app_info,
   }
 } else {
-  // ── PowerShell fallback ──
   module.exports = createPowerShellBackend()
 }
 
 // ---------------------------------------------------------------------------
-// Native backend (@ant/computer-use-native)
+// Native backend (from @zavora-ai/computer-use-mcp)
 // ---------------------------------------------------------------------------
 
-function createNativeBackend(n: typeof Native): InputBackend {
+function createNativeBackend(n: NativeModule): InputBackend {
   return {
     async moveMouse(x: number, y: number, _animated?: boolean): Promise<void> {
-      n.mouseMove!(x, y)
+      n.mouseMove(x, y)
     },
 
     async key(keyName: string, action?: 'click' | 'press' | 'release'): Promise<void> {
       const act = action ?? 'click'
       if (act === 'click') {
-        n.keyPress!(keyName, 1)
+        n.keyPress(keyName, 1)
       } else if (act === 'press') {
-        // hold_key with 0ms duration acts as press-only
-        n.holdKey!([keyName], 0)
+        n.holdKey([keyName], 0)
       } else {
-        // release: keybd_event KEYUP — not directly exposed, approximate via hold+release
-        // For reliable press/release on Windows, use the legacy NAPI or PowerShell path.
-        // The native module's key_press does click (down+up), so for pure release
-        // we fall through to PowerShell for this rare operation.
+        // release: PowerShell keybd_event KEYUP for this rare case
         psReleaseKey(keyName)
       }
     },
 
     async keys(parts: string[]): Promise<void> {
-      // key_press accepts a combo string like "ctrl+c"
-      n.keyPress!(parts.join('+'), 1)
+      n.keyPress(parts.join('+'), 1)
     },
 
     async typeText(text: string): Promise<void> {
-      n.typeText!(text)
+      n.typeText(text)
     },
 
     async mouseLocation(): Promise<{ x: number; y: number }> {
-      return n.cursorPosition!()
+      return n.cursorPosition()
     },
 
     async mouseButton(
@@ -108,29 +97,23 @@ function createNativeBackend(n: typeof Native): InputBackend {
       count?: number,
     ): Promise<void> {
       if (action === 'click') {
-        // mouse_click takes absolute coordinates — we need cursor position first
-        const pos = n.cursorPosition!()
-        n.mouseClick!(pos.x, pos.y, button, count ?? 1)
+        const pos = n.cursorPosition()
+        n.mouseClick(pos.x, pos.y, button, count ?? 1)
       } else {
-        // mouse_button does press/release at current position
-        n.mouseButton!(action, 0, 0)
+        n.mouseButton(action, 0, 0)
       }
     },
 
-    async mouseScroll(
-      amount: number,
-      direction: 'vertical' | 'horizontal',
-    ): Promise<void> {
-      // zavora mouse_scroll(dy, dx) — vertical = dy, horizontal = dx
+    async mouseScroll(amount: number, direction: 'vertical' | 'horizontal'): Promise<void> {
       if (direction === 'vertical') {
-        n.mouseScroll!(amount, 0)
+        n.mouseScroll(amount, 0)
       } else {
-        n.mouseScroll!(0, amount)
+        n.mouseScroll(0, amount)
       }
     },
 
     getFrontmostAppInfo(): FrontmostAppInfo | null {
-      const app = n.getFrontmostApp?.()
+      const app = n.getFrontmostApp()
       if (!app) return null
       return {
         bundleId: app.bundleId ?? '',
@@ -141,7 +124,7 @@ function createNativeBackend(n: typeof Native): InputBackend {
 }
 
 // ---------------------------------------------------------------------------
-// PowerShell helpers (used for edge-case operations not in native module)
+// PowerShell helpers (fallback for edge cases)
 // ---------------------------------------------------------------------------
 
 const POWERSHELL = 'powershell.exe'
@@ -156,16 +139,12 @@ const VK_MAP: Record<string, number> = {
 
 function ps(script: string): void {
   execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
-    encoding: 'utf-8',
-    timeout: 5000,
-    windowsHide: true,
-    stdio: 'pipe',
+    encoding: 'utf-8', timeout: 5000, windowsHide: true, stdio: 'pipe',
   })
 }
 
 function psReleaseKey(keyName: string): void {
-  const lower = keyName.toLowerCase()
-  const vk = VK_MAP[lower]
+  const vk = VK_MAP[keyName.toLowerCase()]
   if (vk === undefined) return
   ps(
     `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }'; [W]::keybd_event(${vk}, 0, 2, [UIntPtr]::Zero)`,
@@ -185,8 +164,7 @@ function createPowerShellBackend(): InputBackend {
     },
 
     async key(keyName: string, action: 'press' | 'release' | 'click' = 'click'): Promise<void> {
-      const lower = keyName.toLowerCase()
-      const vk = VK_MAP[lower]
+      const vk = VK_MAP[keyName.toLowerCase()]
       if (vk === undefined) return
       const flags = action === 'release' ? '2' : '0'
       ps(
@@ -200,8 +178,6 @@ function createPowerShellBackend(): InputBackend {
     },
 
     async keys(parts: string[]): Promise<void> {
-      const combo = parts.join('+')
-      // Use PowerShell for chord
       const modifiers: number[] = []
       let finalKey: string | null = null
       for (const part of parts) {

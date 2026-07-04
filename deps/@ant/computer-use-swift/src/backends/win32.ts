@@ -14,22 +14,20 @@ import type {
   FrontmostApp,
 } from '../types.js'
 
-import type * as Native from '../../computer-use-native/index.js'
+import { loadNative, isNativeAvailable, type NativeModule } from '@ant/computer-use-native'
 
 // ---------------------------------------------------------------------------
 // Try native module
 // ---------------------------------------------------------------------------
 
-let nativeExec: typeof Native | null = null
+let nativeExec: NativeModule | null = null
 
-try {
-  const nativePath =
-    process.env.COMPUTER_USE_NATIVE_NODE_PATH ??
-    path.resolve(import.meta.dir, '../../../computer-use-native/prebuilds/computer-use-native.node')
-  const mod = require(nativePath)
-  nativeExec = mod
-} catch {
-  // Native addon not available — fall through to PowerShell.
+if (isNativeAvailable()) {
+  try {
+    nativeExec = loadNative()
+  } catch {
+    // Native addon not available — fall through to PowerShell.
+  }
 }
 
 // ---------------------------------------------------------------------------

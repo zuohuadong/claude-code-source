@@ -1,156 +1,296 @@
 /**
- * Native NAPI module for @ant/computer-use — vendored from zavora-ai/computer-use-mcp.
+ * Native NAPI module adapter for @ant/computer-use.
  *
- * Provides cross-platform (macOS / Windows / Linux) native operations:
- *   - Mouse: move, click, button, scroll, drag, cursor_position
- *   - Keyboard: key_press, type_text, hold_key
- *   - Screenshot: take_screenshot (DXGI + GDI on Windows, CGWindowList on macOS)
- *   - Display: get_display_size, list_displays
- *   - Apps: get_frontmost_app, activate_app, list_running_apps, hide_app, unhide_app, prepare_display
- *   - Windows: list_windows, get_window, get_cursor_window, activate_window
- *   - Clipboard: read_clipboard, write_clipboard
+ * Loads prebuilt native binaries from @zavora-ai/computer-use-mcp npm package.
+ * The package ships platform-specific .node files:
+ *   - computer-use-napi.darwin-arm64.node
+ *   - computer-use-napi.darwin-x64.node
+ *   - computer-use-napi.win32-x64.node
+ *   - computer-use-napi.linux-x64.node
+ *   - computer-use-napi.linux-arm64.node
  *
- * The native addon is loaded from prebuilds/<platform>/computer-use-native.node.
- * If unavailable, callers should fall back to their platform-specific TS backend.
+ * This adapter re-exports the typed NativeModule interface and provides
+ * convenience wrappers that map zavora function names to @ant conventions.
  */
 
-import path from 'path'
+import { createRequire } from 'module'
+import { existsSync } from 'fs'
+import { join, dirname } from 'path'
+import { fileURLToPath } from 'url'
 
-export interface NativeScreenshotResult {
-  base64?: string
+// ---------------------------------------------------------------------------
+// Types (re-exported from zavora's native.d.ts)
+// ---------------------------------------------------------------------------
+
+export interface AXBounds {
+  x: number
+  y: number
   width: number
   height: number
-  mimeType?: string
-  hash?: string
-  unchanged?: boolean
 }
 
-export interface NativeDisplayInfo {
-  width: number
-  height: number
-  pixelWidth?: number
-  pixelHeight?: number
-  scaleFactor?: number
-  displayId: number | string
+export interface AXElement {
+  role: string
+  label: string | null
+  value: string | null
+  bounds: AXBounds
+  actions: string[]
+  children?: AXElement[]
+  path?: number[]
+  truncated?: boolean
 }
 
-export interface NativeAppInfo {
-  bundleId: string
-  displayName?: string
-  pid?: number
-  activated?: boolean
+export interface MenuItem {
+  title: string
+  enabled: boolean
+  shortcut?: string
+  submenu?: MenuItem[]
 }
 
-export interface NativeWindowInfo {
-  windowId: number | string
-  bundleId: string
-  displayName?: string
-  pid?: number
-  title?: string | null
-  bounds?: {
-    x: number
-    y: number
+export interface MenuBarEntry {
+  title: string
+  enabled: boolean
+  items: MenuItem[]
+}
+
+export interface WindowRecord {
+  windowId: number
+  bundleId: string | null
+  displayName: string
+  pid: number
+  title: string | null
+  bounds: AXBounds
+  isOnScreen: boolean
+  isFocused: boolean
+  displayId: number
+}
+
+export interface NativeModule {
+  mouseMove(x: number, y: number): void
+  mouseClick(x: number, y: number, button: string, count: number): void
+  mouseButton(action: string, x: number, y: number): void
+  mouseScroll(dy: number, dx: number): void
+  mouseDrag(x: number, y: number): void
+  cursorPosition(): { x: number; y: number }
+  keyPress(combo: string, repeat?: number): void
+  typeText(text: string): void
+  holdKey(keys: string[], durationMs: number): void
+  activateApp(bundleId: string, timeoutMs?: number): {
+    bundleId: string
+    activated: boolean
+    displayName?: string
+  }
+  getFrontmostApp(): {
+    bundleId: string
+    displayName: string
+    pid: number
+  } | null
+  getWindow(windowId: number): WindowRecord | null
+  getCursorWindow(): WindowRecord | null
+  activateWindow(windowId: number, timeoutMs?: number): {
+    windowId: number
+    activated: boolean
+    reason: string | null
+  }
+  listWindows(bundleId?: string): Array<WindowRecord>
+  listRunningApps(): Array<{
+    bundleId: string
+    displayName: string
+    pid: number
+    isHidden: boolean
+  }>
+  hideApp(bundleId: string): boolean
+  unhideApp(bundleId: string): boolean
+  getDisplaySize(displayId?: number): {
     width: number
     height: number
+    pixelWidth: number
+    pixelHeight: number
+    scaleFactor: number
+    displayId: number
   }
-  isOnScreen?: boolean
-  isFocused?: boolean
-  displayId?: number
+  listDisplays(): Array<{
+    width: number
+    height: number
+    scaleFactor: number
+    displayId: number
+  }>
+  takeScreenshot(
+    width?: number,
+    targetApp?: string,
+    quality?: number,
+    previousHash?: string,
+    windowId?: number,
+  ): {
+    base64?: string
+    width: number
+    height: number
+    mimeType: string
+    hash: string
+    unchanged: boolean
+  }
+  getUiTree(windowId: number, maxDepth?: number): AXElement
+  getFocusedElement(): AXElement | null
+  findElement(
+    windowId: number,
+    role?: string,
+    label?: string,
+    value?: string,
+    maxResults?: number,
+  ): AXElement[]
+  performAction(
+    windowId: number,
+    role: string,
+    label: string,
+    action: string,
+  ): { performed: boolean; reason?: string; bounds?: AXBounds }
+  setElementValue(
+    windowId: number,
+    role: string,
+    label: string,
+    value: string,
+  ): { set: boolean; reason?: string }
+  getMenuBar(bundleId: string): MenuBarEntry[]
+  pressMenuItem(
+    bundleId: string,
+    menu: string,
+    item: string,
+    submenu?: string,
+  ): { pressed: boolean; reason?: string }
+  listSpaces(): {
+    supported: boolean
+    reason?: string
+    active_space_id: number | null
+    displays: Array<{
+      display_id: string
+      spaces: Array<{ id: number; type: number; uuid: string }>
+    }>
+  }
+  getActiveSpace(): number | null
+  createAgentSpace(): {
+    supported: boolean
+    spaceId?: number
+    attached?: boolean
+    reason?: string
+    note?: string
+  }
+  moveWindowToSpace(
+    windowId: number,
+    spaceId: number,
+  ): {
+    moved: boolean
+    verified?: boolean
+    reason?: string
+    note?: string
+    window_on_screen_before?: boolean
+    window_on_screen_after?: boolean
+  }
+  removeWindowFromSpace(
+    windowId: number,
+    spaceId: number,
+  ): { removed: boolean; reason?: string }
+  destroySpace(spaceId: number): { destroyed: boolean; reason?: string }
+  drainRunloop(): void
+  readClipboard?(): string
+  writeClipboard?(text: string): void
+  annotateImage(
+    base64Jpeg: string,
+    annotations: string | null,
+    gridCols: number | null,
+    gridRows: number | null,
+    quality: number | null,
+  ): { base64: string; width: number; height: number; mimeType: string }
+  cropImage(
+    base64Image: string,
+    x1: number,
+    y1: number,
+    x2: number,
+    y2: number,
+    quality: number | null,
+  ): { base64: string; width: number; height: number; mimeType: string }
+  prepareDisplay(
+    targetBundleId: string,
+    keepVisible: string[],
+  ): { targetBundleId: string; hiddenBundleIds: string[] }
 }
 
 // ---------------------------------------------------------------------------
-// Native addon loader
+// Native module loader — uses zavora's loadNative()
 // ---------------------------------------------------------------------------
 
-let native: any = null
+const SUPPORTED_TARGETS = [
+  { platform: 'darwin', arch: 'arm64' },
+  { platform: 'darwin', arch: 'x64' },
+  { platform: 'win32', arch: 'x64' },
+  { platform: 'linux', arch: 'x64' },
+  { platform: 'linux', arch: 'arm64' },
+]
 
-try {
-  const nativePath =
-    process.env.COMPUTER_USE_NATIVE_NODE_PATH ??
-    path.resolve(import.meta.dir, './prebuilds/computer-use-native.node')
-  native = require(nativePath)
-} catch {
-  // Native addon not available — caller should fall back to TS backend.
+function resolveAddonPath(): string {
+  const platform = process.platform
+  const arch = process.arch
+  const isSupported = SUPPORTED_TARGETS.some(
+    (t) => t.platform === platform && t.arch === arch,
+  )
+  if (!isSupported) {
+    const supported = SUPPORTED_TARGETS.map((t) => `${t.platform}-${t.arch}`).join(', ')
+    throw new Error(
+      `Unsupported platform: ${platform}-${arch}. Supported: ${supported}`,
+    )
+  }
+
+  const binaryName = `computer-use-napi.${platform}-${arch}.node`
+
+  // Allow override via env var
+  const override = process.env.COMPUTER_USE_NATIVE_NODE_PATH
+  if (override && existsSync(override)) {
+    return override
+  }
+
+  // Load from @zavora-ai/computer-use-mcp package root
+  // The .node files are at the package root, next to package.json
+  const require = createRequire(import.meta.url)
+  let pkgRoot: string
+  try {
+    pkgRoot = dirname(require.resolve('@zavora-ai/computer-use-mcp/package.json'))
+  } catch {
+    throw new Error(
+      '@zavora-ai/computer-use-mcp is not installed. Run: bun add @zavora-ai/computer-use-mcp',
+    )
+  }
+
+  const binaryPath = join(pkgRoot, binaryName)
+  if (!existsSync(binaryPath)) {
+    throw new Error(
+      `Native binary not found: ${binaryName}. Expected at ${binaryPath}.`,
+    )
+  }
+  return binaryPath
 }
 
-export const isNativeAvailable = native !== null
+let cached: NativeModule | null = null
+
+export function loadNative(): NativeModule {
+  if (cached) return cached
+  const require = createRequire(import.meta.url)
+  const addonPath = resolveAddonPath()
+  cached = require(addonPath) as NativeModule
+  return cached
+}
+
+export function isNativeAvailable(): boolean {
+  try {
+    loadNative()
+    return true
+  } catch {
+    return false
+  }
+}
 
 // ---------------------------------------------------------------------------
-// Typed re-exports (all optional — only available when native is loaded)
+// Convenience re-exports — typed function references
 // ---------------------------------------------------------------------------
 
-export const mouseMove: ((x: number, y: number) => void) | undefined =
-  native?.mouse_move
-export const mouseClick:
-  | ((x: number, y: number, button: string, count: number) => void)
-  | undefined = native?.mouse_click
-export const mouseButton:
-  | ((action: string, x: number, y: number) => void)
-  | undefined = native?.mouse_button
-export const mouseScroll: ((dy: number, dx: number) => void) | undefined =
-  native?.mouse_scroll
-export const mouseDrag: ((x: number, y: number) => void) | undefined =
-  native?.mouse_drag
-export const cursorPosition: (() => { x: number; y: number }) | undefined =
-  native?.cursor_position
+export const native = (): NativeModule => loadNative()
 
-export const keyPress:
-  | ((combo: string, repeat?: number) => void)
-  | undefined = native?.key_press
-export const typeText: ((text: string) => void) | undefined = native?.type_text
-export const holdKey:
-  | ((keys: string[], durationMs: number) => void)
-  | undefined = native?.hold_key
-
-export const takeScreenshot:
-  | ((
-      width?: number,
-      targetApp?: string,
-      quality?: number,
-      previousHash?: string,
-      windowId?: number,
-    ) => NativeScreenshotResult)
-  | undefined = native?.take_screenshot
-
-export const getDisplaySize:
-  | ((displayId?: number) => NativeDisplayInfo)
-  | undefined = native?.get_display_size
-export const listDisplays: (() => NativeDisplayInfo[]) | undefined =
-  native?.list_displays
-
-export const getFrontmostApp: (() => NativeAppInfo | null) | undefined =
-  native?.get_frontmost_app
-export const activateApp:
-  | ((bundleId: string, timeoutMs?: number) => NativeAppInfo)
-  | undefined = native?.activate_app
-export const listRunningApps: (() => NativeAppInfo[]) | undefined =
-  native?.list_running_apps
-export const hideApp: ((bundleId: string) => boolean) | undefined =
-  native?.hide_app
-export const unhideApp: ((bundleId: string) => boolean) | undefined =
-  native?.unhide_app
-export const prepareDisplay:
-  | ((
-      targetBundleId: string,
-      keepVisible: string[],
-    ) => { targetBundleId: string; hiddenBundleIds: string[] })
-  | undefined = native?.prepare_display
-
-export const listWindows:
-  | ((bundleId?: string) => NativeWindowInfo[])
-  | undefined = native?.list_windows
-export const getWindow: ((windowId: number) => NativeWindowInfo | null) | undefined =
-  native?.get_window
-export const getCursorWindow: (() => NativeWindowInfo | null) | undefined =
-  native?.get_cursor_window
-export const activateWindow:
-  | ((windowId: number, timeoutMs?: number) => { windowId: number; activated: boolean })
-  | undefined = native?.activate_window
-
-export const readClipboard: (() => string) | undefined = native?.read_clipboard
-export const writeClipboard: ((text: string) => void) | undefined =
-  native?.write_clipboard
-
-export const drainRunloop: (() => void) | undefined = native?.drainRunloop
-
-export default native
+export default { loadNative, isNativeAvailable }

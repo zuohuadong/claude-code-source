@@ -6,101 +6,14 @@ on:
     paths:
       - 'deps/@ant/computer-use-input/**'
       - 'deps/@ant/computer-use-swift/**'
-      - 'deps/@ant/computer-use-native/**'
       - '.github/workflows/build-native.yml'
   pull_request:
     branches: [main]
     paths:
       - 'deps/@ant/computer-use-input/**'
       - 'deps/@ant/computer-use-swift/**'
-      - 'deps/@ant/computer-use-native/**'
 
 jobs:
-  build-native:
-    name: computer-use-native (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            label: arm64-darwin
-          - os: macos-latest
-            target: x86_64-apple-darwin
-            label: x64-darwin
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            label: x64-msvc
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            label: x64-linux
-
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: ${{ matrix.target }}
-
-      - name: Install Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: '20'
-
-      - name: Install Linux deps
-        if: runner.os == 'Linux'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libx11-dev libxtst-dev libxrandr-dev
-
-      - name: Cache cargo registry
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-            deps/@ant/computer-use-native/target
-          key: cargo-native-${{ matrix.target }}-${{ hashFiles('deps/@ant/computer-use-native/Cargo.toml') }}
-
-      - name: Build (cargo check)
-        working-directory: deps/@ant/computer-use-native
-        run: cargo check --target ${{ matrix.target }}
-
-      - name: Build release
-        working-directory: deps/@ant/computer-use-native
-        run: cargo build --release --target ${{ matrix.target }}
-
-      - name: Stage artifact (macOS)
-        if: runner.os == 'macOS'
-        working-directory: deps/@ant/computer-use-native
-        run: |
-          mkdir -p prebuilds/${{ matrix.label }}
-          cp target/${{ matrix.target }}/release/libcomputer_use_native.dylib prebuilds/${{ matrix.label }}/computer-use-native.node
-
-      - name: Stage artifact (Windows)
-        if: runner.os == 'Windows'
-        working-directory: deps/@ant/computer-use-native
-        shell: bash
-        run: |
-          mkdir -p prebuilds/${{ matrix.label }}
-          cp target/${{ matrix.target }}/release/computer_use_native.dll prebuilds/${{ matrix.label }}/computer-use-native.node
-
-      - name: Stage artifact (Linux)
-        if: runner.os == 'Linux'
-        working-directory: deps/@ant/computer-use-native
-        run: |
-          mkdir -p prebuilds/${{ matrix.label }}
-          cp target/${{ matrix.target }}/release/libcomputer_use_native.so prebuilds/${{ matrix.label }}/computer-use-native.node
-
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: computer-use-native-${{ matrix.label }}
-          path: deps/@ant/computer-use-native/prebuilds/${{ matrix.label }}/computer-use-native.node
-          if-no-files-found: error
-
   build-input:
     name: computer-use-input (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -171,8 +84,13 @@ jobs:
           if-no-files-found: error
 
   verify-typescript:
-    name: TypeScript compilation check
-    runs-on: ubuntu-latest
+    name: TypeScript + native module check
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        include:
+          - os: ubuntu-latest
+          - os: macos-latest
     steps:
       - uses: actions/checkout@v4
 
@@ -181,6 +99,14 @@ jobs:
 
       - name: Install deps
         run: bun install --silent
+
+      - name: Verify native module loads
+        run: bun -e "
+          const { isNativeAvailable, loadNative } = require('./deps/@ant/computer-use-native/index.ts');
+          if (!isNativeAvailable()) throw new Error('Native module failed to load');
+          const n = loadNative();
+          console.log('Native functions:', Object.keys(n).join(', '));
+        "
 
       - name: TypeScript check
         run: bunx tsc --noEmit --pretty false 2>&1 | grep -i "computer-use" || echo "No computer-use TS errors"
