@@ -97,7 +97,7 @@ func removeEscTap() {
 /// Set the number of expected ESC presses to intercept.
 ///
 /// Called from the JS layer via the `notifyExpectedEscape` method.
-func notifyExpectedEscape(_ count: Int) {
+func _setExpectedEscapes(_ count: Int) {
     expectedEscapes = count
     if count > 0 {
         installEscTap()
@@ -126,7 +126,7 @@ private func notifyEscapeDetected() {
 /// This is called by Node.js/Bun consumers via _drainMainRunLoop()
 /// because libuv does not drain DispatchQueue.main automatically.
 /// Under Electron, CFRunLoop handles this natively.
-func drainMainRunLoop() {
+func _drainMainRunLoopImpl() {
     let runLoop = RunLoop.main
     runLoop.run(until: Date(timeIntervalSinceNow: 0.005))
 }

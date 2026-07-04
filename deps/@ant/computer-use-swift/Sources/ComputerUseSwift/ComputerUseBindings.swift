@@ -156,7 +156,7 @@ enum ComputerUseBindings {
         hostBundleId: String
     ) -> PrepareDisplayResult {
         let exempt = exemptBundleIds(hostBundleId: hostBundleId)
-        let hidden = hideNonAllowedApps(
+        let hidden = _hideNonAllowedApps(
             allowlistBundleIds: allowedBundleIds,
             exemptBundleIds: exempt
         )
@@ -172,7 +172,7 @@ enum ComputerUseBindings {
         preferredDisplayId: UInt32? = nil
     ) async -> ResolvePrepareCaptureResult? {
         let exempt = exemptBundleIds(hostBundleId: hostBundleId)
-        let hidden = hideNonAllowedApps(
+        let hidden = _hideNonAllowedApps(
             allowlistBundleIds: allowedBundleIds,
             exemptBundleIds: exempt
         )
@@ -222,14 +222,14 @@ enum ComputerUseBindings {
     ///
     /// JS signature: displayIds()
     static func displayIds() -> [UInt32] {
-        listDisplays().map { $0.displayId }
+        _listDisplays().map { $0.displayId }
     }
 
     /// Get all displays with full geometry.
     ///
     /// JS signature: displays()
     static func displays() -> [CUDisplayInfo] {
-        listDisplays()
+        _listDisplays()
     }
 
     // MARK: - Window methods
@@ -238,14 +238,14 @@ enum ComputerUseBindings {
     ///
     /// JS signature: findWindowDisplays({ bundleIds: string[] })
     static func findWindowDisplays(bundleIds: [String]) -> [(bundleId: String, displayIds: [UInt32])] {
-        findWindowDisplays(bundleIds: bundleIds)
+        _findWindowDisplays(bundleIds: bundleIds)
     }
 
     /// Get the frontmost application.
     ///
     /// JS signature: frontmostApplication()
     static func frontmostApplication() -> (bundleId: String, displayName: String)? {
-        frontmostApplication()
+        _frontmostApplication()
     }
 
     // MARK: - App resolution
@@ -312,7 +312,7 @@ enum ComputerUseBindings {
     ///
     /// JS signature: notifyExpectedEscape(count)
     static func notifyExpectedEscape(_ count: Int) {
-        notifyExpectedEscape(count)
+        _setExpectedEscapes(count)
     }
 
     // MARK: - App management
@@ -321,21 +321,21 @@ enum ComputerUseBindings {
     ///
     /// JS signature: unhide({ bundleIds: string[] })
     static func unhide(bundleIds: [String]) {
-        unhide(bundleIds: bundleIds)
+        _unhideApps(bundleIds: bundleIds)
     }
 
     /// Open / activate an app.
     ///
     /// JS signature: open({ bundleId: string })
     static func open(bundleId: String) {
-        _ = activate(bundleId: bundleId)
+        _ = _activateApp(bundleId: bundleId)
     }
 
     /// Preview which apps would be hidden.
     ///
     /// JS signature: previewHideSet({ exemptBundleIds: string[] })
     static func previewHideSet(exemptBundleIds: [String]) -> [(bundleId: String, displayName: String)] {
-        previewHideSet(exemptBundleIds: exemptBundleIds, allowlistBundleIds: [])
+        _previewHideSet(exemptBundleIds: exemptBundleIds, allowlistBundleIds: [])
     }
 
     // MARK: - Run loop pump
@@ -344,7 +344,7 @@ enum ComputerUseBindings {
     ///
     /// JS signature: _drainMainRunLoop()
     static func drainMainRunLoop() {
-        drainMainRunLoop()
+        _drainMainRunLoopImpl()
     }
 
     // MARK: - Private helpers
@@ -360,7 +360,7 @@ enum ComputerUseBindings {
 
     /// Find the display that contains the most allowed-app windows.
     private static func bestDisplayForAllowedApps(_ allowedBundleIds: [String]) -> UInt32 {
-        let mapping = findWindowDisplays(bundleIds: allowedBundleIds)
+        let mapping = _findWindowDisplays(bundleIds: allowedBundleIds)
         var displayCount: [UInt32: Int] = [:]
 
         for (_, displayIds) in mapping {

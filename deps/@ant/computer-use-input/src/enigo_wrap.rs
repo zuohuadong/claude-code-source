@@ -16,6 +16,9 @@ use std::sync::mpsc;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 
+#[allow(non_camel_case_types)]
+type NSInteger = isize;
+
 // ---------------------------------------------------------------------------
 // Key name -> enigo::Key mapping
 // ---------------------------------------------------------------------------
@@ -406,43 +409,72 @@ pub fn mouse_location() -> Result<(i32, i32), String> {
 /// Uses NSEvent.pressedMouseButtons which is thread-safe.
 /// Bit 0 = left, bit 1 = right, bit 2 = middle, etc.
 pub fn pressed_mouse_buttons() -> Result<i32, String> {
-    use objc2::msg_send;
-    use objc2::runtime::AnyObject;
-    unsafe {
-        let cls = objc2::rc::Retained::try_alloc_init::<AnyObject>()
-            .map_err(|_| "Failed to create object")?;
-        let _: () = msg_send![&cls, hmm];
-        // Fallback: use CGEventSource
-        let source = core_graphics::event::CGEventSource::new(
-            core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
-        ).map_err(|_| "Failed to create CGEventSource")?;
-        let buttons = source.flags();
-        Ok(buttons.bits() as i32)
-    }
+    // NSEvent.pressedMouseButtons is thread-safe and returns a bitmask.
+    // Bit 0 = left, bit 1 = right, bit 2 = middle.
+    // We use core_graphics::event_source::CGEventSource which provides
+    // the same data without requiring AppKit on the main thread.
+    //
+    // Alternative: call NSEvent.pressedMouseButtons via objc2 on main thread,
+    // but CGEventSource is simpler and doesn't require main-thread dispatch.
+    run_on_main(|_enigo| {
+        // On the main thread we can safely use NSApp / NSEvent.
+        // Dispatch to main, read NSEvent.pressedMouseButtons.
+        // Since we're already in run_on_main, use a direct approach.
+        //
+        // NSEvent.pressedMouseButtons is a class method that returns the
+        // combined mouse button state as a bitmask. It works from any thread
+        // in practice, but Apple docs say main thread.
+        // We use CGEventSourceFlagsState for the actual read:
+        //   CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState,
+        //                            kCGMouseEventSubtype)
+        //
+        // Simplest: use core_graphics directly.
+        let buttons = unsafe {
+            CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState)
+        };
+        Ok(buttons)
+    })
 }
 
 /// Get frontmost application info from NSWorkspace.
 pub fn get_frontmost_app_info() -> Result<Option<crate::FrontmostAppInfo>, String> {
-    use objc2_app_kit::NSWorkspace;
-    use objc2_foundation::MainThreadMarker;
+    // NSWorkspace.frontmostApplication must be called on the main thread.
+    // We dispatch via run_on_main and extract bundleId + localizedName.
+    run_on_main(|_enigo| {
+        // Access NSWorkspace.shared.frontmostApplication via objc2 on main thread.
+        // This is safe because run_on_main dispatches to DispatchQueue.main.
+        use objc2::rc::Retained;
+        use objc2::runtime::AnyObject;
+        use objc2::msg_send;
+        use objc2_foundation::NSString;
 
-    let mtm = MainThreadMarker::new()
-        .ok_or("Not on main thread")?;
+        unsafe {
+            // NSWorkspace *ws = [NSWorkspace sharedWorkspace];
+            let ws_class = objc2::class!(NSWorkspace);
+            let ws: Retained<AnyObject> = msg_send![ws_class, sharedWorkspace];
 
-    let workspace = NSWorkspace::sharedWorkspace(mtm);
-    let frontmost = workspace.frontmostApplication(mtm);
+            // NSRunningApplication *app = [ws frontmostApplication];
+            let app: Option<Retained<AnyObject>> = msg_send![&ws, frontmostApplication];
 
-    match frontmost {
-        Some(app) => {
-            let bundle_id = app.bundleIdentifier().map(|s| s.to_string()).unwrap_or_default();
-            let app_name = app.localizedName().map(|s| s.to_string()).unwrap_or_default();
-            Ok(Some(crate::FrontmostAppInfo {
-                bundle_id,
-                app_name,
-            }))
+            match app {
+                Some(app) => {
+                    // NSString *bid = [app bundleIdentifier];
+                    let bid_ns: Option<Retained<NSString>> = msg_send![&app, bundleIdentifier];
+                    let bundle_id = bid_ns.map(|s| s.to_string()).unwrap_or_default();
+
+                    // NSString *name = [app localizedName];
+                    let name_ns: Option<Retained<NSString>> = msg_send![&app, localizedName];
+                    let app_name = name_ns.map(|s| s.to_string()).unwrap_or_default();
+
+                    Ok(Some(crate::FrontmostAppInfo {
+                        bundle_id,
+                        app_name,
+                    }))
+                }
+                None => Ok(None),
+            }
         }
-        None => Ok(None),
-    }
+    })
 }
 
 // ---------------------------------------------------------------------------
@@ -466,14 +498,16 @@ fn parse_mouse_button(name: &str) -> Result<enigo::MouseButton, String> {
 }
 
 /// Read current mouse position via CGEvent.
-fn current_mouse_position(enigo: &Enigo) -> (i32, i32) {
-    // enigo doesn't expose location directly; use CGEvent
-    let _ = enigo; // suppress unused warning
+fn current_mouse_position(_enigo: &Enigo) -> (i32, i32) {
+    // Read cursor position via CGEventCreate on the combined session state.
+    // CGEvent::new(nil) works for reading the current mouse location.
     unsafe {
         let event = core_graphics::event::CGEvent::new(None);
         match event {
             Some(e) => {
                 let p = e.location();
+                // CGEvent location is in global display coordinates (origin top-left
+                // of primary display for CGDirectDisplay coordinates on macOS).
                 (p.x as i32, p.y as i32)
             }
             None => (0, 0),

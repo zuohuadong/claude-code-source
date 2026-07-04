@@ -223,7 +223,7 @@ foreach ($s in $shortcuts) {
   $lnk = $shell.CreateShortcut($s.FullName)
   $result += "$($s.BaseName)|$($lnk.TargetPath)"
 }
-$result -join '`n'
+$result -join [char]10
 `)
 
   if (!out) return []

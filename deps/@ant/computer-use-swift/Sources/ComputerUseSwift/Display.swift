@@ -2,12 +2,12 @@
 //
 // Recovered from binary:
 //   func cuDisplayInfo(forDisplayID:) -> CUDisplayInfo?
-//   func findWindowDisplays(bundleIds:) -> [(bundleId, displayIds)]
+//   func _findWindowDisplays(bundleIds:) -> [(bundleId, displayIds)]
 //   func notifyExpectedEscape()
 //   func hotkey()
-//   func unhide(bundleIds:)
+//   func _unhideApps(bundleIds:)
 //   func open(bundleId:)
-//   func previewHideSet(exemptBundleIds:)
+//   func _previewHideSet(exemptBundleIds:)
 //   func hide / activated / display / displayIds / displays
 
 import Foundation
@@ -72,7 +72,7 @@ func findScreen(for displayId: UInt32) -> NSScreen? {
 ///
 /// Returns an array of (bundleId, [displayIds]) pairs.
 /// Uses CGWindowListCopyWindowInfo to enumerate on-screen windows.
-func findWindowDisplays(bundleIds: [String]) -> [(bundleId: String, displayIds: [UInt32])] {
+func _findWindowDisplays(bundleIds: [String]) -> [(bundleId: String, displayIds: [UInt32])] {
     let targetSet = Set(bundleIds)
     var result: [(String, [UInt32])] = []
 
@@ -130,7 +130,7 @@ func findWindowDisplays(bundleIds: [String]) -> [(bundleId: String, displayIds: 
 ///
 /// Uses NSWorkspace.runningApplications to find visible apps,
 /// then calls hide() on each one not in the allowlist.
-func hideNonAllowedApps(allowlistBundleIds: [String], exemptBundleIds: [String]) -> [String] {
+func _hideNonAllowedApps(allowlistBundleIds: [String], exemptBundleIds: [String]) -> [String] {
     let allowSet = Set(allowlistBundleIds)
     let exemptSet = Set(exemptBundleIds)
     var hidden: [String] = []
@@ -158,7 +158,7 @@ func hideNonAllowedApps(allowlistBundleIds: [String], exemptBundleIds: [String])
 }
 
 /// Unhide previously hidden apps.
-func unhide(bundleIds: [String]) {
+func _unhideApps(bundleIds: [String]) {
     let workspace = NSWorkspace.shared
     let runningApps = workspace.runningApplications
 
@@ -171,7 +171,7 @@ func unhide(bundleIds: [String]) {
 }
 
 /// Activate an app by bundle ID (bring to front).
-func activate(bundleId: String) -> Bool {
+func _activateApp(bundleId: String) -> Bool {
     let workspace = NSWorkspace.shared
     let runningApps = workspace.runningApplications
 
@@ -193,7 +193,7 @@ func activate(bundleId: String) -> Bool {
 }
 
 /// Preview which apps would be hidden (without actually hiding them).
-func previewHideSet(exemptBundleIds: [String], allowlistBundleIds: [String]) -> [(bundleId: String, displayName: String)] {
+func _previewHideSet(exemptBundleIds: [String], allowlistBundleIds: [String]) -> [(bundleId: String, displayName: String)] {
     let allowSet = Set(allowlistBundleIds)
     let exemptSet = Set(exemptBundleIds)
     var result: [(String, String)] = []
@@ -216,7 +216,7 @@ func previewHideSet(exemptBundleIds: [String], allowlistBundleIds: [String]) -> 
 
 // MARK: - Running apps
 
-func listRunningApps() -> [RunningApp] {
+func _listRunningApps() -> [RunningApp] {
     let workspace = NSWorkspace.shared
     return workspace.runningApplications.compactMap { app in
         guard let bundleId = app.bundleIdentifier else { return nil }
@@ -230,7 +230,7 @@ func listRunningApps() -> [RunningApp] {
 
 // MARK: - Frontmost app
 
-func frontmostApplication() -> (bundleId: String, displayName: String)? {
+func _frontmostApplication() -> (bundleId: String, displayName: String)? {
     guard let app = NSWorkspace.shared.frontmostApplication,
           let bundleId = app.bundleIdentifier else {
         return nil
@@ -241,7 +241,7 @@ func frontmostApplication() -> (bundleId: String, displayName: String)? {
 
 // MARK: - Display enumeration
 
-func listDisplays() -> [CUDisplayInfo] {
+func _listDisplays() -> [CUDisplayInfo] {
     NSScreen.screens.compactMap { screen in
         guard let did = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else {
             return nil
