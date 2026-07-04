@@ -3,7 +3,7 @@
  *
  * Selects the appropriate backend based on process.platform:
  *   darwin -> native .node addon (Rust/NAPI-RS + enigo)
- *   win32  -> PowerShell + Win32 P/Invoke backend
+ *   win32  -> native Rust addon (or PowerShell fallback)
  *   other  -> throws (not supported)
  *
  * The exported object conforms to the InputBackend interface.

@@ -1,53 +1,35 @@
-//! enigo wrapper: dispatches all input operations to the macOS main thread.
+//! Cross-platform input wrapper using enigo.
 //!
-//! Original source path: claude-native/src/input/enigo_wrap.rs
-//! Original binary: computer-use-input.node (Mach-O arm64, 856KB)
-//!
-//! Architecture recovered from binary:
-//! - enigo::Enigo must run on the main thread (CGEventPost requirement)
-//! - dispatch2::run_on_main bridges from tokio worker -> DispatchQueue.main
-//! - key()/keys() return futures that resolve when the main-thread callback completes
-//! - Under Electron: CFRunLoop drains main queue (works natively)
-//! - Under libuv (Node/Bun): main queue stalls; caller must pump via
-//!   @ant/computer-use-swift's _drainMainRunLoop
+//! macOS: enigo dispatches to DispatchQueue.main via dispatch2 (CGEventPost
+//! requires main thread). Under libuv, caller pumps CFRunLoop.
+//! Windows: SendInput is thread-safe, calls go direct. No dispatch needed.
+
+#[path = "platform/mod.rs"]
+mod platform;
 
 use enigo::{
-    Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings,
+    Axis, Button, Coordinate, Direction, Key, Keyboard, Mouse,
 };
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::process::Command;
-use std::sync::mpsc;
-
-#[link(name = "CoreGraphics", kind = "framework")]
-extern "C" {
-    fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
-}
-
-const CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE: i32 = 0;
 
 // ---------------------------------------------------------------------------
 // Key name -> enigo::Key mapping
 // ---------------------------------------------------------------------------
 
-/// Build the complete key mapping table.
-///
-/// All key names are lowercase. The full enum was recovered from binary
-/// strings: the enigo crate serializes enum variant names for error
-/// messages, and the complete list was present in the `.rodata` section.
 fn build_key_map() -> HashMap<&'static str, Key> {
     let mut m = HashMap::new();
-    // Modifiers
+
+    // --- Modifiers (cross-platform) ---
     m.insert("alt", Key::Alt);
     m.insert("option", Key::Alt);
     m.insert("lalt", Key::Alt);
-    m.insert("ralt", Key::ROption);
     m.insert("shift", Key::LShift);
     m.insert("lshift", Key::LShift);
     m.insert("rshift", Key::RShift);
     m.insert("control", Key::Control);
     m.insert("ctrl", Key::Control);
-    m.insert("lcontrol", Key::Control);
+    m.insert("lcontrol", Key::LControl);
     m.insert("rcontrol", Key::RControl);
     m.insert("cmd", Key::Meta);
     m.insert("command", Key::Meta);
@@ -55,7 +37,8 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("win", Key::Meta);
     m.insert("windows", Key::Meta);
     m.insert("meta", Key::Meta);
-    // Navigation
+
+    // --- Navigation (cross-platform) ---
     m.insert("return", Key::Return);
     m.insert("enter", Key::Return);
     m.insert("tab", Key::Tab);
@@ -72,7 +55,8 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("pagedown", Key::PageDown);
     m.insert("home", Key::Home);
     m.insert("end", Key::End);
-    // Function keys
+
+    // --- Function keys (F1-F20 cross-platform) ---
     m.insert("f1", Key::F1);
     m.insert("f2", Key::F2);
     m.insert("f3", Key::F3);
@@ -93,7 +77,8 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("f18", Key::F18);
     m.insert("f19", Key::F19);
     m.insert("f20", Key::F20);
-    // Numpad
+
+    // --- Numpad (cross-platform) ---
     m.insert("numpad0", Key::Numpad0);
     m.insert("numpad1", Key::Numpad1);
     m.insert("numpad2", Key::Numpad2);
@@ -104,32 +89,60 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("numpad7", Key::Numpad7);
     m.insert("numpad8", Key::Numpad8);
     m.insert("numpad9", Key::Numpad9);
-    // Media / special keys (recovered from binary enum names)
-    m.insert("brightnessdown", Key::BrightnessDown);
-    m.insert("brightnessup", Key::BrightnessUp);
-    m.insert("contrastup", Key::ContrastUp);
-    m.insert("contrastdown", Key::ContrastDown);
-    m.insert("eject", Key::Eject);
-    m.insert("illuminationup", Key::IlluminationUp);
-    m.insert("illuminationtoggle", Key::IlluminationToggle);
-    m.insert("power", Key::Power);
-    m.insert("vidmirror", Key::VidMirror);
+
+    // --- Math / misc (cross-platform) ---
+    m.insert("add", Key::Add);
+    m.insert("subtract", Key::Subtract);
+    m.insert("multiply", Key::Multiply);
+    m.insert("decimal", Key::Decimal);
+    m.insert("divide", Key::Divide);
+    m.insert("help", Key::Help);
+    m.insert("capslock", Key::CapsLock);
+
+    // --- Volume / media (cross-platform subset) ---
     m.insert("volumedown", Key::VolumeDown);
     m.insert("volumemute", Key::VolumeMute);
     m.insert("volumeup", Key::VolumeUp);
-    m.insert("launchpad", Key::Launchpad);
-    m.insert("launchpanel", Key::LaunchPanel);
-    m.insert("missioncontrol", Key::MissionControl);
-    m.insert("mediafast", Key::MediaFast);
     m.insert("medianexttrack", Key::MediaNextTrack);
     m.insert("mediaplaypause", Key::MediaPlayPause);
     m.insert("mediaprevtrack", Key::MediaPrevTrack);
-    m.insert("mediarewind", Key::MediaRewind);
-    // Math
-    m.insert("decimal", Key::Decimal);
-    m.insert("divide", Key::Divide);
-    // Misc
-    m.insert("capslock", Key::CapsLock);
+
+    // --- macOS-only keys ---
+    #[cfg(target_os = "macos")]
+    {
+        m.insert("ralt", Key::ROption);
+        m.insert("brightnessdown", Key::BrightnessDown);
+        m.insert("brightnessup", Key::BrightnessUp);
+        m.insert("contrastup", Key::ContrastUp);
+        m.insert("contrastdown", Key::ContrastDown);
+        m.insert("eject", Key::Eject);
+        m.insert("illuminationup", Key::IlluminationUp);
+        m.insert("illuminationtoggle", Key::IlluminationToggle);
+        m.insert("power", Key::Power);
+        m.insert("vidmirror", Key::VidMirror);
+        m.insert("launchpad", Key::Launchpad);
+        m.insert("launchpanel", Key::LaunchPanel);
+        m.insert("missioncontrol", Key::MissionControl);
+        m.insert("mediafast", Key::MediaFast);
+        m.insert("mediarewind", Key::MediaRewind);
+    }
+
+    // --- Windows-only keys ---
+    #[cfg(target_os = "windows")]
+    {
+        m.insert("ralt", Key::RMenu);
+        m.insert("numlock", Key::Numlock);
+        m.insert("scrolllock", Key::Scroll);
+        m.insert("insert", Key::Insert);
+        m.insert("printscreen", Key::PrintScr);
+        m.insert("pause", Key::Pause);
+        m.insert("f21", Key::F21);
+        m.insert("f22", Key::F22);
+        m.insert("f23", Key::F23);
+        m.insert("f24", Key::F24);
+        m.insert("mediastop", Key::MediaStop);
+    }
+
     m
 }
 
@@ -144,17 +157,11 @@ static MODIFIER_NAMES: Lazy<std::collections::HashSet<&'static str>> = Lazy::new
     ])
 });
 
-/// Resolve a key name string to an enigo::Key.
-///
-/// Handles: named keys (cmd, return, f1...), single characters (a, 1, !).
-/// Returns Err with the exact message recovered from the binary:
-///   "Invalid key name: <name>. Please use a valid key name."
 fn resolve_key(name: &str) -> Result<Key, String> {
     let lower = name.to_lowercase();
     if let Some(k) = KEY_MAP.get(lower.as_str()) {
         return Ok(*k);
     }
-    // Single character -> Layout key
     let chars: Vec<char> = name.chars().collect();
     if chars.len() == 1 {
         return Ok(Key::Unicode(chars[0]));
@@ -166,51 +173,13 @@ fn resolve_key(name: &str) -> Result<Key, String> {
 }
 
 // ---------------------------------------------------------------------------
-// Main-thread dispatch bridge
+// Public API
 // ---------------------------------------------------------------------------
 
-/// Run a closure on the macOS main thread and block until it returns.
-///
-/// Uses dispatch2::run_on_main which enqueues onto DispatchQueue.main.
-/// The channel receiver blocks the tokio worker until the closure sends
-/// its result back. Under Electron, the main queue is drained by CFRunLoop
-/// automatically. Under Node/Bun (libuv), the caller must pump the run loop.
-fn run_on_main<F, R>(f: F) -> Result<R, String>
-where
-    F: FnOnce(&mut Enigo) -> Result<R, String> + Send + 'static,
-    R: Send + 'static,
-{
-    let (tx, rx) = mpsc::channel::<Result<R, String>>();
-    dispatch2::run_on_main(move |_| {
-        let mut enigo = match Enigo::new(&Settings::default()) {
-            Ok(e) => e,
-            Err(e) => {
-                let _ = tx.send(Err(format!(
-                    "The application does not have the permission to simulate input! ({})",
-                    e
-                )));
-                return;
-            }
-        };
-        let result = f(&mut enigo);
-        let _ = tx.send(result);
-    });
-    rx.recv().map_err(|e| {
-        format!("Failed to receive result from main thread operation: {}", e)
-    })?
-}
-
-// ---------------------------------------------------------------------------
-// Public API implementations
-// ---------------------------------------------------------------------------
-
-/// Press, release, or click a single key.
-///
-/// action: "press", "release", or "click" (default: click)
 pub fn key_action(key_name: &str, action: &str) -> Result<(), String> {
     let key = resolve_key(key_name)?;
     let act = action.to_lowercase();
-    run_on_main(move |enigo| {
+    platform::with_enigo(move |enigo| {
         match act.as_str() {
             "press" => enigo
                 .key(key, Direction::Press)
@@ -234,15 +203,8 @@ pub fn key_action(key_name: &str, action: &str) -> Result<(), String> {
     })
 }
 
-/// Press a key chord like "cmd+c" or "shift+alt+tab".
-///
-/// Parses modifiers, presses them, presses the final key, releases the
-/// final key, then releases modifiers in reverse order.
 pub fn key_chord(chord: &str) -> Result<(), String> {
-    let parts: Vec<String> = chord
-        .split('+')
-        .map(|s| s.trim().to_string())
-        .collect();
+    let parts: Vec<String> = chord.split('+').map(|s| s.trim().to_string()).collect();
     if parts.is_empty() {
         return Err("No keys provided".to_string());
     }
@@ -257,7 +219,6 @@ pub fn key_chord(chord: &str) -> Result<(), String> {
         } else if final_key.is_none() {
             final_key = Some(part.clone());
         } else {
-            // Multiple non-modifier keys — treat as sequential press
             modifiers.push(resolve_key(part)?);
         }
     }
@@ -265,98 +226,73 @@ pub fn key_chord(chord: &str) -> Result<(), String> {
     let final_key = final_key.ok_or_else(|| "No keys provided".to_string())?;
     let final_enigo_key = resolve_key(&final_key)?;
 
-    run_on_main(move |enigo| {
-        // Press modifiers
+    platform::with_enigo(move |enigo| {
         for m in &modifiers {
-            enigo.key(*m, Direction::Press).map_err(|e| {
-                format!("Error pressing modifier key: {}", e)
-            })?;
+            enigo.key(*m, Direction::Press)
+                .map_err(|e| format!("Error pressing modifier key: {}", e))?;
         }
-        // Click final key
-        enigo.key(final_enigo_key, Direction::Click).map_err(|e| {
-            format!("Error performing key action: {}", e)
-        })?;
-        // Release modifiers in reverse
+        enigo.key(final_enigo_key, Direction::Click)
+            .map_err(|e| format!("Error performing key action: {}", e))?;
         for m in modifiers.iter().rev() {
-            enigo.key(*m, Direction::Release).map_err(|e| {
-                format!("Error releasing modifier key: {}", e)
-            })?;
+            enigo.key(*m, Direction::Release)
+                .map_err(|e| format!("Error releasing modifier key: {}", e))?;
         }
         Ok(())
     })
 }
 
-/// Type text via enigo's text() method.
-///
-/// On macOS, enigo uses CGEventKeyboardSetUnicodeString which handles
-/// Unicode properly. When the keyboard layout doesn't support fast text
-/// entry, enigo falls back to individual character entry.
 pub fn type_text(text: &str) -> Result<(), String> {
     if text.is_empty() {
         return Err("The text to enter was empty".to_string());
     }
     let text = text.to_string();
-    run_on_main(move |enigo| {
-        enigo.text(&text).map_err(|e| {
-            format!("Error typing text: {}", e)
-        })?;
+    platform::with_enigo(move |enigo| {
+        enigo.text(&text)
+            .map_err(|e| format!("Error typing text: {}", e))?;
         Ok(())
     })
 }
 
-/// Move mouse to (x, y). Animated path uses linear interpolation at ~60fps.
 pub fn move_mouse(x: i32, y: i32, animated: bool) -> Result<(), String> {
-    run_on_main(move |enigo| {
+    platform::with_enigo(move |enigo| {
         if animated {
-            // Get current position and interpolate
-            let (cur_x, cur_y) = current_mouse_position(enigo);
-            let steps = 10; // ~166ms at 60fps
+            let (cur_x, cur_y) = platform::current_mouse_position(enigo);
+            let steps = 10;
             for i in 1..=steps {
                 let t = i as f64 / steps as f64;
-                let ease = 1.0 - (1.0 - t).powi(3); // ease-out-cubic
+                let ease = 1.0 - (1.0 - t).powi(3);
                 let ix = cur_x as f64 + (x as f64 - cur_x as f64) * ease;
                 let iy = cur_y as f64 + (y as f64 - cur_y as f64) * ease;
-                enigo.move_mouse(ix as i32, iy as i32, Coordinate::Abs).map_err(|e| {
-                    format!("Error moving mouse: {}", e)
-                })?;
+                enigo.move_mouse(ix as i32, iy as i32, Coordinate::Abs)
+                    .map_err(|e| format!("Error moving mouse: {}", e))?;
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
         } else {
-            enigo.move_mouse(x, y, Coordinate::Abs).map_err(|e| {
-                format!("Error moving mouse: {}", e)
-            })?;
+            enigo.move_mouse(x, y, Coordinate::Abs)
+                .map_err(|e| format!("Error moving mouse: {}", e))?;
         }
         Ok(())
     })
 }
 
-/// Perform a mouse button action.
-///
-/// Valid button names: left, right, middle, scrollUp, scrollDown,
-///   scrollLeft, scrollRight
-/// Valid actions: press, release, click
 pub fn mouse_button(button: &str, action: &str, count: i32) -> Result<(), String> {
     let btn = parse_mouse_button(button)?;
     let act = action.to_lowercase();
 
-    run_on_main(move |enigo| {
+    platform::with_enigo(move |enigo| {
         match act.as_str() {
             "press" => {
-                enigo.button(btn, Direction::Press).map_err(|e| {
-                    format!("Error performing button action on attempt: {}", e)
-                })?;
+                enigo.button(btn, Direction::Press)
+                    .map_err(|e| format!("Error performing button action: {}", e))?;
             }
             "release" => {
-                // On macOS, mouse_up for Scroll buttons has no effect
-                enigo.button(btn, Direction::Release).map_err(|e| {
-                    format!("Error performing button action on attempt: {}", e)
-                })?;
+                enigo.button(btn, Direction::Release)
+                    .map_err(|e| format!("Error performing button action: {}", e))?;
             }
             "click" => {
                 for _ in 0..count {
-                    enigo.button(btn, Direction::Click).map_err(|e| {
-                        format!("Error performing button action on attempt: {}", e)
-                    })?;
+                    enigo.button(btn, Direction::Click)
+                        .map_err(|e| format!("Error performing button action: {}", e))?;
                 }
             }
             _ => {
@@ -370,10 +306,6 @@ pub fn mouse_button(button: &str, action: &str, count: i32) -> Result<(), String
     })
 }
 
-/// Scroll the mouse wheel.
-///
-/// amount: number of ticks (positive = down/right, negative = up/left)
-/// direction: "vertical" or "horizontal"
 pub fn mouse_scroll(amount: i32, direction: &str) -> Result<(), String> {
     let dir = direction.to_lowercase();
     let horiz = match dir.as_str() {
@@ -382,82 +314,31 @@ pub fn mouse_scroll(amount: i32, direction: &str) -> Result<(), String> {
         _ => return Err(format!("Invalid scroll direction: {}", direction)),
     };
 
-    run_on_main(move |enigo| {
+    platform::with_enigo(move |enigo| {
         if horiz {
-            enigo.scroll(amount, Axis::Horizontal).map_err(|e| {
-                format!("Error performing scroll action: {}", e)
-            })?;
+            enigo.scroll(amount, Axis::Horizontal)
+                .map_err(|e| format!("Error performing scroll action: {}", e))?;
         } else {
-            enigo.scroll(amount, Axis::Vertical).map_err(|e| {
-                format!("Error performing scroll action: {}", e)
-            })?;
+            enigo.scroll(amount, Axis::Vertical)
+                .map_err(|e| format!("Error performing scroll action: {}", e))?;
         }
         Ok(())
     })
 }
 
-/// Get the current mouse cursor position.
 pub fn mouse_location() -> Result<(i32, i32), String> {
-    run_on_main(|enigo| {
-        let (x, y) = current_mouse_position(enigo);
+    platform::with_enigo(|enigo| {
+        let (x, y) = platform::current_mouse_position(enigo);
         Ok((x, y))
     })
 }
 
-/// Get the bitmask of pressed mouse buttons.
-///
-/// Uses NSEvent.pressedMouseButtons which is thread-safe.
-/// Bit 0 = left, bit 1 = right, bit 2 = middle, etc.
 pub fn pressed_mouse_buttons() -> Result<i32, String> {
-    let mut bitmask = 0;
-    for button in 0..32 {
-        let pressed = unsafe {
-            CGEventSourceButtonState(CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE, button)
-        };
-        if pressed {
-            bitmask |= 1 << button;
-        }
-    }
-    Ok(bitmask)
+    platform::pressed_mouse_buttons()
 }
 
-/// Get frontmost application info from NSWorkspace.
 pub fn get_frontmost_app_info() -> Result<Option<crate::FrontmostAppInfo>, String> {
-    let output = Command::new("osascript")
-        .arg("-e")
-        .arg(
-            r#"tell application "System Events"
-set frontApp to first application process whose frontmost is true
-set appName to name of frontApp
-set bundleId to bundle identifier of frontApp
-if bundleId is missing value then set bundleId to ""
-return bundleId & tab & appName
-end tell"#,
-        )
-        .output()
-        .map_err(|e| format!("Failed to query frontmost application: {}", e))?;
-
-    if !output.status.success() {
-        return Ok(None);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let trimmed = stdout.trim();
-    if trimmed.is_empty() {
-        return Ok(None);
-    }
-
-    let mut parts = trimmed.splitn(2, '\t');
-    let bundle_id = parts.next().unwrap_or_default().to_string();
-    let app_name = parts.next().unwrap_or_default().to_string();
-    if bundle_id.is_empty() && app_name.is_empty() {
-        return Ok(None);
-    }
-
-    Ok(Some(crate::FrontmostAppInfo {
-        bundle_id,
-        app_name,
-    }))
+    platform::get_frontmost_app_info()
 }
 
 // ---------------------------------------------------------------------------
@@ -477,21 +358,5 @@ fn parse_mouse_button(name: &str) -> Result<Button, String> {
             "Invalid button name: {}. Valid options are: left, right, middle, scrollUp, scrollDown, scrollLeft, scrollRight",
             name
         )),
-    }
-}
-
-/// Read current mouse position via CGEvent.
-fn current_mouse_position(_enigo: &Enigo) -> (i32, i32) {
-    // Read cursor position via CGEventCreate on the combined session state.
-    let source = core_graphics::event_source::CGEventSource::new(
-        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
-    );
-    match source.and_then(core_graphics::event::CGEvent::new) {
-        Ok(e) => {
-            let p = e.location();
-            // CGEvent location is in global display coordinates.
-            (p.x as i32, p.y as i32)
-        }
-        Err(_) => (0, 0),
     }
 }

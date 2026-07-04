@@ -1,5 +1,51 @@
+/**
+ * Windows (win32) backend for @ant/computer-use-input.
+ *
+ * Tries to load the native Rust NAPI addon first (computer-use-input.node).
+ * If unavailable, falls back to a PowerShell + Win32 P/Invoke implementation.
+ *
+ * The native addon uses the `windows` crate directly (SendInput, SetCursorPos,
+ * GetCursorPos, GetForegroundWindow, GetAsyncKeyState) — no PowerShell overhead.
+ */
+
 import { execFileSync } from 'child_process'
+import path from 'path'
 import type { FrontmostAppInfo, InputBackend } from '../types.js'
+
+// ---------------------------------------------------------------------------
+// Try native .node first
+// ---------------------------------------------------------------------------
+
+let native: any = null
+try {
+  const nativePath =
+    process.env.COMPUTER_USE_INPUT_NODE_PATH ??
+    path.resolve(import.meta.dir, '../../prebuilds/computer-use-input.node')
+  native = require(nativePath)
+} catch {
+  // Native addon not available — fall through to PowerShell fallback.
+}
+
+if (native && native.isSupported !== false) {
+  // Native addon loaded successfully — re-export its functions.
+  // The NAPI layer exports the same API on both macOS and Windows.
+  module.exports = {
+    moveMouse: native.moveMouse ?? native.move_mouse,
+    key: native.key,
+    keys: native.keys,
+    typeText: native.typeText ?? native.type_text,
+    mouseLocation: native.mouseLocation ?? native.mouse_location,
+    mouseButton: native.mouseButton ?? native.mouse_button,
+    mouseScroll: native.mouseScroll ?? native.mouse_scroll,
+    getFrontmostAppInfo: native.getFrontmostAppInfo ?? native.get_frontmost_app_info,
+  }
+} else {
+  module.exports = createPowerShellBackend()
+}
+
+// ---------------------------------------------------------------------------
+// PowerShell fallback (used when .node is not yet compiled for win32)
+// ---------------------------------------------------------------------------
 
 const POWERSHELL = 'powershell.exe'
 
@@ -25,184 +71,153 @@ const VK_MAP: Record<string, number> = {
   decimal: 0x6e, divide: 0x6f, multiply: 0x6a, subtract: 0x6d, add: 0x6b,
 }
 
-const MODIFIERS = new Set([
-  'shift', 'lshift', 'rshift',
-  'control', 'ctrl', 'lcontrol', 'rcontrol',
-  'alt', 'option', 'lalt', 'ralt',
-  'win', 'windows', 'meta', 'command', 'cmd', 'super',
+const MODIFIER_KEYS = new Set([
+  'shift', 'lshift', 'rshift', 'control', 'ctrl', 'lcontrol', 'rcontrol',
+  'alt', 'option', 'lalt', 'ralt', 'win', 'meta', 'command', 'cmd', 'super',
 ])
 
-const WIN32_TYPES = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -Language CSharp @'
-using System;
-using System.Runtime.InteropServices;
-
-public class CuWin32Input {
-  [StructLayout(LayoutKind.Sequential)] public struct POINT { public int X; public int Y; }
-  [StructLayout(LayoutKind.Sequential)] public struct MOUSEINPUT {
-    public int dx; public int dy; public int mouseData; public uint dwFlags; public uint time; public IntPtr dwExtraInfo;
-  }
-  [StructLayout(LayoutKind.Sequential)] public struct KEYBDINPUT {
-    public ushort wVk; public ushort wScan; public uint dwFlags; public uint time; public IntPtr dwExtraInfo;
-  }
-  [StructLayout(LayoutKind.Explicit)] public struct INPUT {
-    [FieldOffset(0)] public uint type;
-    [FieldOffset(8)] public MOUSEINPUT mi;
-    [FieldOffset(8)] public KEYBDINPUT ki;
-  }
-
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool SetCursorPos(int X, int Y);
-  [DllImport("user32.dll", SetLastError=true)] public static extern bool GetCursorPos(out POINT p);
-  [DllImport("user32.dll", SetLastError=true)] public static extern uint SendInput(uint nInputs, INPUT[] pInputs, int cbSize);
-  [DllImport("user32.dll", SetLastError=true)] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo);
-  [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr GetForegroundWindow();
-  [DllImport("user32.dll", SetLastError=true)] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-
-  public const uint INPUT_MOUSE = 0;
-  public const uint INPUT_KEYBOARD = 1;
-  public const uint MOUSEEVENTF_LEFTDOWN = 0x0002;
-  public const uint MOUSEEVENTF_LEFTUP = 0x0004;
-  public const uint MOUSEEVENTF_RIGHTDOWN = 0x0008;
-  public const uint MOUSEEVENTF_RIGHTUP = 0x0010;
-  public const uint MOUSEEVENTF_MIDDLEDOWN = 0x0020;
-  public const uint MOUSEEVENTF_MIDDLEUP = 0x0040;
-  public const uint MOUSEEVENTF_WHEEL = 0x0800;
-  public const uint MOUSEEVENTF_HWHEEL = 0x1000;
-  public const uint KEYEVENTF_KEYUP = 0x0002;
-  public const uint KEYEVENTF_UNICODE = 0x0004;
-}
-'@
-`
-
-function ps(script: string, timeout = 5000): string {
-  return execFileSync(
-    POWERSHELL,
-    ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-Command', `${WIN32_TYPES}\n${script}`],
-    { encoding: 'utf8', timeout, windowsHide: true },
-  ).trim()
+function ps(script: string): void {
+  execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf-8',
+    timeout: 5000,
+    windowsHide: true,
+    stdio: 'pipe',
+  })
 }
 
-function sendMouse(flags: string, mouseData = 0): void {
-  ps(`$i = New-Object CuWin32Input+INPUT
-$i.type = [CuWin32Input]::INPUT_MOUSE
-$i.mi.dwFlags = [CuWin32Input]::${flags}
-$i.mi.mouseData = ${mouseData}
-$sent = [CuWin32Input]::SendInput(1, @($i), [Runtime.InteropServices.Marshal]::SizeOf([CuWin32Input+INPUT]))
-if ($sent -ne 1) { throw "SendInput mouse failed" }`)
+function psCapture(script: string): string {
+  return execFileSync(POWERSHELL, ['-NoProfile', '-NonInteractive', '-Command', script], {
+    encoding: 'utf-8',
+    timeout: 5000,
+    windowsHide: true,
+    stdio: 'pipe',
+  }).trim()
 }
 
-function sendUnicodeUnit(codeUnit: number, keyUp: boolean): void {
-  const flags = keyUp
-    ? '[CuWin32Input]::KEYEVENTF_UNICODE -bor [CuWin32Input]::KEYEVENTF_KEYUP'
-    : '[CuWin32Input]::KEYEVENTF_UNICODE'
-  ps(`$i = New-Object CuWin32Input+INPUT
-$i.type = [CuWin32Input]::INPUT_KEYBOARD
-$i.ki.wScan = ${codeUnit}
-$i.ki.dwFlags = ${flags}
-$sent = [CuWin32Input]::SendInput(1, @($i), [Runtime.InteropServices.Marshal]::SizeOf([CuWin32Input+INPUT]))
-if ($sent -ne 1) { throw "SendInput keyboard failed" }`)
-}
+function createPowerShellBackend(): InputBackend {
+  return {
+    async moveMouse(x: number, y: number): Promise<void> {
+      ps(
+        `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern bool SetCursorPos(int x, int y); }'; [W]::SetCursorPos(${Math.round(x)}, ${Math.round(y)}) | Out-Null`,
+      )
+    },
 
-function keyDown(vk: number): void {
-  ps(`[CuWin32Input]::keybd_event(${vk}, 0, 0, [UIntPtr]::Zero)`)
-}
+    async key(keyName: string, action: 'press' | 'release'): Promise<void> {
+      const lower = keyName.toLowerCase()
+      const vk = VK_MAP[lower]
+      const flags = action === 'release' ? '2' : '0'
+      if (vk !== undefined) {
+        ps(
+          `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }'; [W]::keybd_event(${vk}, 0, ${flags}, [UIntPtr]::Zero)`,
+        )
+      } else if (keyName.length === 1) {
+        const code = keyName.charCodeAt(0)
+        const upFlag = action === 'release' ? ' -bor 2' : ''
+        ps(
+          `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }'; [W]::keybd_event(0, ${code}, 4${upFlag}, [UIntPtr]::Zero)`,
+        )
+      }
+    },
 
-function keyUp(vk: number): void {
-  ps(`[CuWin32Input]::keybd_event(${vk}, 0, [CuWin32Input]::KEYEVENTF_KEYUP, [UIntPtr]::Zero)`)
-}
+    async keys(parts: string[]): Promise<void> {
+      const modifiers: number[] = []
+      let finalKey: string | null = null
+      for (const part of parts) {
+        if (MODIFIER_KEYS.has(part.toLowerCase())) {
+          const vk = VK_MAP[part.toLowerCase()]
+          if (vk !== undefined) modifiers.push(vk)
+        } else {
+          finalKey = part
+        }
+      }
+      if (!finalKey) return
 
-export const moveMouse: InputBackend['moveMouse'] = async (x, y) => {
-  ps(`if (-not [CuWin32Input]::SetCursorPos(${Math.round(x)}, ${Math.round(y)})) { throw "SetCursorPos failed" }`)
-}
+      let script = ''
+      for (const vk of modifiers) {
+        script += `[W]::keybd_event(${vk}, 0, 0, [UIntPtr]::Zero); `
+      }
+      const lower = finalKey.toLowerCase()
+      const vk = VK_MAP[lower]
+      if (vk !== undefined) {
+        script += `[W]::keybd_event(${vk}, 0, 0, [UIntPtr]::Zero); [W]::keybd_event(${vk}, 0, 2, [UIntPtr]::Zero); `
+      } else if (finalKey.length === 1) {
+        const code = finalKey.charCodeAt(0)
+        script += `[W]::keybd_event(0, ${code}, 4, [UIntPtr]::Zero); [W]::keybd_event(0, ${code}, 6, [UIntPtr]::Zero); `
+      }
+      for (let i = modifiers.length - 1; i >= 0; i--) {
+        script += `[W]::keybd_event(${modifiers[i]}, 0, 2, [UIntPtr]::Zero); `
+      }
+      ps(
+        `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }'; ${script}`,
+      )
+    },
 
-export const mouseLocation: InputBackend['mouseLocation'] = async () => {
-  const out = ps(`$p = New-Object CuWin32Input+POINT
-if (-not [CuWin32Input]::GetCursorPos([ref]$p)) { throw "GetCursorPos failed" }
-"$($p.X),$($p.Y)"`)
-  const [x, y] = out.split(',').map(Number)
-  return { x, y }
-}
+    async typeText(text: string): Promise<void> {
+      for (const ch of [...text]) {
+        const code = ch.codePointAt(0)!
+        ps(
+          `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void keybd_event(byte bVk, byte bScan, uint dwFlags, UIntPtr dwExtraInfo); }'; [W]::keybd_event(0, ${code}, 4, [UIntPtr]::Zero); [W]::keybd_event(0, ${code}, 6, [UIntPtr]::Zero)`,
+        )
+      }
+    },
 
-export const mouseButton: InputBackend['mouseButton'] = async (button, action = 'click', count = 1) => {
-  const names: Record<string, [string, string]> = {
-    left: ['MOUSEEVENTF_LEFTDOWN', 'MOUSEEVENTF_LEFTUP'],
-    right: ['MOUSEEVENTF_RIGHTDOWN', 'MOUSEEVENTF_RIGHTUP'],
-    middle: ['MOUSEEVENTF_MIDDLEDOWN', 'MOUSEEVENTF_MIDDLEUP'],
-  }
-  const pair = names[String(button).toLowerCase()]
-  if (!pair) throw new Error(`Invalid button name: ${button}`)
-  const [down, up] = pair
-  if (action === 'press') return sendMouse(down)
-  if (action === 'release') return sendMouse(up)
-  for (let i = 0; i < Math.max(1, count); i++) {
-    sendMouse(down)
-    sendMouse(up)
-  }
-}
+    async mouseLocation(): Promise<{ x: number; y: number }> {
+      const out = psCapture(
+        `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [StructLayout(LayoutKind.Sequential)] public struct P { public int X; public int Y; } [DllImport("user32.dll")] public static extern bool GetCursorPos(out P p); }'; $p = New-Object W+P; [W]::GetCursorPos([ref]$p) | Out-Null; "$($p.X),$($p.Y)"`,
+      )
+      const [xStr, yStr] = out.split(',')
+      return { x: Number(xStr), y: Number(yStr) }
+    },
 
-export const mouseScroll: InputBackend['mouseScroll'] = async (amount, direction = 'vertical') => {
-  const flag = direction === 'horizontal' ? 'MOUSEEVENTF_HWHEEL' : 'MOUSEEVENTF_WHEEL'
-  sendMouse(flag, Math.trunc(amount * 120))
-}
+    async mouseButton(
+      button: 'left' | 'right' | 'middle',
+      action: 'click' | 'press' | 'release',
+      count?: number,
+    ): Promise<void> {
+      const down =
+        button === 'left' ? '2' : button === 'right' ? '8' : '32'
+      const up = button === 'left' ? '4' : button === 'right' ? '16' : '64'
+      let flags: string
+      if (action === 'press') flags = down
+      else if (action === 'release') flags = up
+      else {
+        // click = down then up, repeated count times
+        const n = count ?? 1
+        let clickScript = ''
+        for (let i = 0; i < n; i++) {
+          clickScript += `[W]::mouse_event(${down}, 0, 0, 0, 0); [W]::mouse_event(${up}, 0, 0, 0, 0); `
+        }
+        ps(
+          `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo); }'; ${clickScript}`,
+        )
+        return
+      }
+      ps(
+        `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo); }'; [W]::mouse_event(${flags}, 0, 0, 0, 0)`,
+      )
+    },
 
-export const key: InputBackend['key'] = async (keyName, action = 'click') => {
-  const vk = VK_MAP[String(keyName).toLowerCase()]
-  if (vk !== undefined) {
-    if (action === 'press') return keyDown(vk)
-    if (action === 'release') return keyUp(vk)
-    keyDown(vk)
-    keyUp(vk)
-    return
-  }
+    async mouseScroll(
+      amount: number,
+      direction: 'vertical' | 'horizontal',
+    ): Promise<void> {
+      const flag = direction === 'horizontal' ? '0x1000' : '0x0800'
+      ps(
+        `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; public class W { [DllImport("user32.dll")] public static extern void mouse_event(uint dwFlags, int dx, int dy, uint dwData, UIntPtr dwExtraInfo); }'; [W]::mouse_event(${flag}, 0, 0, ${amount * 120}, 0)`,
+      )
+    },
 
-  const text = String(keyName)
-  if ([...text].length !== 1) throw new Error(`Invalid key name: ${keyName}`)
-  if (action === 'release') {
-    for (let i = text.length - 1; i >= 0; i--) sendUnicodeUnit(text.charCodeAt(i), true)
-    return
-  }
-  for (let i = 0; i < text.length; i++) sendUnicodeUnit(text.charCodeAt(i), false)
-  if (action !== 'press') {
-    for (let i = text.length - 1; i >= 0; i--) sendUnicodeUnit(text.charCodeAt(i), true)
-  }
-}
-
-export const keys: InputBackend['keys'] = async (parts) => {
-  const modifiers: string[] = []
-  let finalKey: string | undefined
-  for (const part of parts) {
-    const lower = String(part).toLowerCase()
-    if (MODIFIERS.has(lower)) modifiers.push(part)
-    else finalKey = part
-  }
-  if (finalKey === undefined) throw new Error('No keys provided')
-  for (const mod of modifiers) await key(mod, 'press')
-  try {
-    await key(finalKey, 'click')
-  } finally {
-    for (let i = modifiers.length - 1; i >= 0; i--) await key(modifiers[i]!, 'release')
-  }
-}
-
-export const typeText: InputBackend['typeText'] = async (text) => {
-  for (let i = 0; i < String(text).length; i++) {
-    const code = String(text).charCodeAt(i)
-    sendUnicodeUnit(code, false)
-    sendUnicodeUnit(code, true)
-  }
-}
-
-export const getFrontmostAppInfo: InputBackend['getFrontmostAppInfo'] = () => {
-  try {
-    const out = ps(`$hwnd = [CuWin32Input]::GetForegroundWindow()
-$pid = [uint32]0
-[CuWin32Input]::GetWindowThreadProcessId($hwnd, [ref]$pid) | Out-Null
-$p = Get-Process -Id $pid -ErrorAction Stop
-"$($p.MainModule.FileName)|$($p.ProcessName)"`, 3000)
-    const [bundleId, appName] = out.split('|', 2)
-    return bundleId && appName ? { bundleId, appName } as FrontmostAppInfo : null
-  } catch {
-    return null
+    getFrontmostAppInfo(): FrontmostAppInfo | null {
+      try {
+        const out = psCapture(
+          `Add-Type -TypeDefinition 'using System; using System.Runtime.InteropServices; using System.Diagnostics; using System.Text; public class W { [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow(); [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr h, out uint p); }'; $h = [W]::GetForegroundWindow(); $pid = [uint32]0; [W]::GetWindowThreadProcessId($h, [ref]$pid) | Out-Null; $p = Get-Process -Id $pid -ErrorAction SilentlyContinue; "$($p.MainModule.FileName)|$($p.ProcessName)"`,
+        )
+        if (!out || !out.includes('|')) return null
+        const [exePath, appName] = out.split('|', 2)
+        return { bundleId: exePath, appName } as FrontmostAppInfo
+      } catch {
+        return null
+      }
+    },
   }
 }
