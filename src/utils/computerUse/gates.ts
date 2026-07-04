@@ -1,8 +1,12 @@
 import type { CoordinateMode, CuSubGates } from '@ant/computer-use-mcp/types'
 
 import { getDynamicConfig_CACHED_MAY_BE_STALE } from '../../services/analytics/growthbook.js'
+import { getSettings_DEPRECATED } from '../../utils/settings/settings.js'
+import { BUILTIN_MARKETPLACE_NAME } from '../../plugins/builtinPlugins.js'
 import { getSubscriptionType } from '../auth.js'
 import { isEnvTruthy } from '../envUtils.js'
+
+const COMPUTER_USE_PLUGIN_ID = `computer-use@${BUILTIN_MARKETPLACE_NAME}`
 
 type ChicagoConfig = CuSubGates & {
   enabled: boolean
@@ -42,11 +46,37 @@ function hasRequiredSubscription(): boolean {
   return tier === 'max' || tier === 'pro'
 }
 
+/**
+ * Read the user's plugin enabled state for Computer Use.
+ *
+ * Returns:
+ *   - true/false when the user has explicitly toggled the plugin via /plugin
+ *   - undefined when no preference is set (caller falls through to GB + sub)
+ */
+function getPluginEnabledPreference(): boolean | undefined {
+  const settings = getSettings_DEPRECATED()
+  const raw = settings?.enabledPlugins?.[COMPUTER_USE_PLUGIN_ID]
+  if (Array.isArray(raw)) {
+    return raw.length > 0
+  }
+  if (typeof raw === 'boolean') {
+    return raw
+  }
+  return undefined
+}
+
+/**
+ * Computer Use is enabled when BOTH conditions hold:
+ *   1. The /plugin toggle is on (user preference, or GrowthBook fallback)
+ *   2. The subscription tier allows it (Max/Pro, or ant bypass)
+ *
+ * The plugin toggle takes priority: if the user has explicitly enabled or
+ * disabled Computer Use via /plugin, that wins. Otherwise we fall back to the
+ * GrowthBook gate + subscription check for backward compatibility with
+ * existing dogfooding rollouts.
+ */
 export function getChicagoEnabled(): boolean {
   // Disable for ants whose shell inherited monorepo dev config.
-  // MONOREPO_ROOT_DIR is exported by config/local/zsh/zshrc, which
-  // laptop-setup.sh wires into ~/.zshrc — its presence is the cheap
-  // proxy for "has monorepo access". Override: ALLOW_ANT_COMPUTER_USE_MCP=1.
   if (
     process.env.USER_TYPE === 'ant' &&
     process.env.MONOREPO_ROOT_DIR &&
@@ -54,7 +84,18 @@ export function getChicagoEnabled(): boolean {
   ) {
     return false
   }
-  return hasRequiredSubscription() && readConfig().enabled
+
+  if (!hasRequiredSubscription()) {
+    return false
+  }
+
+  // Plugin toggle takes priority over GrowthBook
+  const pluginPref = getPluginEnabledPreference()
+  if (pluginPref !== undefined) {
+    return pluginPref
+  }
+
+  return readConfig().enabled
 }
 
 export function getChicagoSubGates(): CuSubGates {
