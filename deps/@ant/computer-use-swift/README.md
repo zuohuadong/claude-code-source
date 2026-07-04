@@ -6,8 +6,7 @@ Swift native macOS backend for Computer Use screenshots and display management.
 
 ```
 Node.js / Bun
-  -> js/index.js (platform detection + native loader)
-  -> src/index.ts (cross-platform loader)
+  -> src/index.ts (platform detection + native loader)
      -> src/backends/darwin.ts (native .node addon)
      -> src/backends/win32.ts (PowerShell + .NET)
 ```
@@ -47,7 +46,6 @@ Source files:
 ### Building from source (macOS)
 
 ```bash
-cd Sources/
 swift build -c release
 # Output: .build/release/libComputerUseSwift.dylib
 ```

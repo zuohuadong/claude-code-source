@@ -18,8 +18,9 @@ use napi::bindgen_prelude::*;
 /// Recovers from binary: `key(key: <key>)` debug log, supports the full
 /// enigo Key enum (F1-F20, modifiers, arrows, etc).
 #[napi]
-pub async fn key(key: String) -> Result<()> {
-    enigo_wrap::key_action(&key, "click")
+pub async fn key(key: String, action: Option<String>) -> Result<()> {
+    let action = action.unwrap_or_else(|| "click".to_string());
+    enigo_wrap::key_action(&key, &action)
         .map_err(|e| Error::from_reason(e))
 }
 
@@ -105,6 +106,12 @@ pub async fn pressed_mouse_buttons() -> Result<i32> {
 /// Uses NSWorkspace.shared.frontmostApplication.
 #[napi(js_name = "getFrontmostAppInfo")]
 pub async fn get_frontmost_app_info() -> Result<Option<FrontmostAppInfo>> {
+    enigo_wrap::get_frontmost_app_info()
+        .map_err(|e| Error::from_reason(e))
+}
+
+#[napi(js_name = "getFrontmostAppInfoSync")]
+pub fn get_frontmost_app_info_sync() -> Result<Option<FrontmostAppInfo>> {
     enigo_wrap::get_frontmost_app_info()
         .map_err(|e| Error::from_reason(e))
 }

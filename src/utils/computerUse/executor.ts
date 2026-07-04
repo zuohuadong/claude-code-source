@@ -68,6 +68,21 @@ function computeTargetDims(
 }
 
 async function readClipboardViaPbpaste(): Promise<string> {
+  if (process.platform === 'win32') {
+    const { stdout, code } = await execFileNoThrow('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Get-Clipboard -Raw',
+    ], {
+      useCwd: false,
+    })
+    if (code !== 0) {
+      throw new Error(`Get-Clipboard exited with code ${code}`)
+    }
+    return stdout
+  }
+
   const { stdout, code } = await execFileNoThrow('pbpaste', [], {
     useCwd: false,
   })
@@ -78,6 +93,22 @@ async function readClipboardViaPbpaste(): Promise<string> {
 }
 
 async function writeClipboardViaPbcopy(text: string): Promise<void> {
+  if (process.platform === 'win32') {
+    const { code } = await execFileNoThrow('powershell.exe', [
+      '-NoProfile',
+      '-NonInteractive',
+      '-Command',
+      'Set-Clipboard -Value ([Console]::In.ReadToEnd())',
+    ], {
+      input: text,
+      useCwd: false,
+    })
+    if (code !== 0) {
+      throw new Error(`Set-Clipboard exited with code ${code}`)
+    }
+    return
+  }
+
   const { code } = await execFileNoThrow('pbcopy', [], {
     input: text,
     useCwd: false,
@@ -260,9 +291,9 @@ export function createCliExecutor(opts: {
   getMouseAnimationEnabled: () => boolean
   getHideBeforeActionEnabled: () => boolean
 }): ComputerExecutor {
-  if (process.platform !== 'darwin') {
+  if (process.platform !== 'darwin' && process.platform !== 'win32') {
     throw new Error(
-      `createCliExecutor called on ${process.platform}. Computer control is macOS-only.`,
+      `createCliExecutor called on ${process.platform}. Computer control is only available on macOS and Windows.`,
     )
   }
 

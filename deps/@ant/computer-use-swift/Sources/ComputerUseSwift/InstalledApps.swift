@@ -77,7 +77,7 @@ enum InstalledAppsCache {
                 NSMetadataItemContentTypeKey,
                 "com.apple.application-bundle"
             )
-            query.searchScopes = [NSMetadataScopeLocalComputer]
+            query.searchScopes = [NSMetadataQueryLocalComputerScope]
             query.sortDescriptors = [
                 NSSortDescriptor(key: NSMetadataItemDisplayNameKey, ascending: true)
             ]
@@ -87,9 +87,11 @@ enum InstalledAppsCache {
 
             let center = NotificationCenter.default
 
-            let didFinish = center.addObserver(forName: .NSMetadataQueryDidFinishGathering,
-                                               object: query,
-                                               queue: .main) { _ in
+            var didFinish: NSObjectProtocol?
+
+            didFinish = center.addObserver(forName: .NSMetadataQueryDidFinishGathering,
+                                           object: query,
+                                           queue: .main) { _ in
                 guard !finished else { return }
                 finished = true
 
@@ -116,18 +118,10 @@ enum InstalledAppsCache {
                 }
 
                 query.stop()
-                center.removeObserver(didFinish)
+                if let didFinish {
+                    center.removeObserver(didFinish)
+                }
                 continuation.resume(returning: results)
-            }
-
-            let didFail = center.addObserver(forName: .NSMetadataQueryDidFinishGathering,
-                                             object: query,
-                                             queue: .main) { _ in
-                guard !finished else { return }
-                finished = true
-                query.stop()
-                center.removeObserver(didFail)
-                continuation.resume(throwing: InstalledAppsError.queryFailedToStart)
             }
 
             // Start with a timeout safeguard
@@ -135,7 +129,9 @@ enum InstalledAppsCache {
                 guard !finished else { return }
                 finished = true
                 query.stop()
-                center.removeObserver(didFinish)
+                if let didFinish {
+                    center.removeObserver(didFinish)
+                }
                 continuation.resume(
                     throwing: NSError(
                         domain: "InstalledAppsCache",
@@ -146,8 +142,9 @@ enum InstalledAppsCache {
             }
 
             if !query.start() {
-                center.removeObserver(didFinish)
-                center.removeObserver(didFail)
+                if let didFinish {
+                    center.removeObserver(didFinish)
+                }
                 continuation.resume(
                     throwing: InstalledAppsError.queryFailedToStart
                 )
@@ -203,7 +200,7 @@ enum AppBundleResolver {
 
         return names.map { name in
             // First try NSWorkspace URL lookup
-            if let url = workspace.urlForApplication(withBundleIdentifier: name) {
+            if workspace.urlForApplication(withBundleIdentifier: name) != nil {
                 // The input was already a bundle ID
                 return name
             }
@@ -218,7 +215,7 @@ enum AppBundleResolver {
 
             let query = NSMetadataQuery()
             query.predicate = predicate
-            query.searchScopes = [NSMetadataScopeLocalComputer]
+            query.searchScopes = [NSMetadataQueryLocalComputerScope]
 
             var result: String?
             let semaphore = DispatchSemaphore(value: 0)

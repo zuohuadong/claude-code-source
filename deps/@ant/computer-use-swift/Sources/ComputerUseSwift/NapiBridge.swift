@@ -28,7 +28,7 @@ import Foundation
 /// Creates the `computerUse` object with all methods and returns it.
 ///
 /// In the NAPI binary, this is `_napi_register_module_v1`.
-/// The JS wrapper (js/index.js) accesses `native.computerUse`.
+/// The TypeScript wrapper accesses `native.computerUse`.
 @_cdecl("napi_register_module_v1")
 public func napiRegisterModule(
     env: OpaquePointer?,

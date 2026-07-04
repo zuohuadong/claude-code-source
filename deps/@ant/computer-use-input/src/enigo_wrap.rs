@@ -11,13 +11,20 @@
 //! - Under libuv (Node/Bun): main queue stalls; caller must pump via
 //!   @ant/computer-use-swift's _drainMainRunLoop
 
-use enigo::{Enigo, Key, KeyboardControlling, MouseControlling};
-use std::sync::mpsc;
+use enigo::{
+    Axis, Button, Coordinate, Direction, Enigo, Key, Keyboard, Mouse, Settings,
+};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::process::Command;
+use std::sync::mpsc;
 
-#[allow(non_camel_case_types)]
-type NSInteger = isize;
+#[link(name = "CoreGraphics", kind = "framework")]
+extern "C" {
+    fn CGEventSourceButtonState(state_id: i32, button: u32) -> bool;
+}
+
+const CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE: i32 = 0;
 
 // ---------------------------------------------------------------------------
 // Key name -> enigo::Key mapping
@@ -34,8 +41,7 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("alt", Key::Alt);
     m.insert("option", Key::Alt);
     m.insert("lalt", Key::Alt);
-    m.insert("ralt", Key::RAlt);
-    m.insert("ralt", Key::RAlt);
+    m.insert("ralt", Key::ROption);
     m.insert("shift", Key::LShift);
     m.insert("lshift", Key::LShift);
     m.insert("rshift", Key::RShift);
@@ -43,12 +49,12 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("ctrl", Key::Control);
     m.insert("lcontrol", Key::Control);
     m.insert("rcontrol", Key::RControl);
-    m.insert("cmd", Key::Super);
-    m.insert("command", Key::Super);
-    m.insert("super", Key::Super);
-    m.insert("win", Key::Super);
-    m.insert("windows", Key::Super);
-    m.insert("meta", Key::Super);
+    m.insert("cmd", Key::Meta);
+    m.insert("command", Key::Meta);
+    m.insert("super", Key::Meta);
+    m.insert("win", Key::Meta);
+    m.insert("windows", Key::Meta);
+    m.insert("meta", Key::Meta);
     // Navigation
     m.insert("return", Key::Return);
     m.insert("enter", Key::Return);
@@ -124,11 +130,6 @@ fn build_key_map() -> HashMap<&'static str, Key> {
     m.insert("divide", Key::Divide);
     // Misc
     m.insert("capslock", Key::CapsLock);
-    m.insert("numlock", Key::NumLock);
-    m.insert("scrolllock", Key::ScrollLock);
-    m.insert("insert", Key::Insert);
-    m.insert("printscreen", Key::PrintScreen);
-    m.insert("pause", Key::Pause);
     m
 }
 
@@ -156,7 +157,7 @@ fn resolve_key(name: &str) -> Result<Key, String> {
     // Single character -> Layout key
     let chars: Vec<char> = name.chars().collect();
     if chars.len() == 1 {
-        return Ok(Key::Layout(chars[0]));
+        return Ok(Key::Unicode(chars[0]));
     }
     Err(format!(
         "Invalid key name: {}. Please use a valid key name.",
@@ -180,8 +181,8 @@ where
     R: Send + 'static,
 {
     let (tx, rx) = mpsc::channel::<Result<R, String>>();
-    dispatch2::run_on_main(move || {
-        let mut enigo = match Enigo::new() {
+    dispatch2::run_on_main(move |_| {
+        let mut enigo = match Enigo::new(&Settings::default()) {
             Ok(e) => e,
             Err(e) => {
                 let _ = tx.send(Err(format!(
@@ -211,11 +212,16 @@ pub fn key_action(key_name: &str, action: &str) -> Result<(), String> {
     let act = action.to_lowercase();
     run_on_main(move |enigo| {
         match act.as_str() {
-            "press" => enigo.key_down(key).map_err(|e| format!("Error pressing key: {}", e))?,
-            "release" => enigo.key_up(key).map_err(|e| format!("Error releasing key: {}", e))?,
+            "press" => enigo
+                .key(key, Direction::Press)
+                .map_err(|e| format!("Error pressing key: {}", e))?,
+            "release" => enigo
+                .key(key, Direction::Release)
+                .map_err(|e| format!("Error releasing key: {}", e))?,
             "click" => {
-                enigo.key_down(key).map_err(|e| format!("Error pressing key: {}", e))?;
-                enigo.key_up(key).map_err(|e| format!("Error releasing key: {}", e))?;
+                enigo
+                    .key(key, Direction::Click)
+                    .map_err(|e| format!("Error performing key action: {}", e))?;
             }
             _ => {
                 return Err(format!(
@@ -262,20 +268,17 @@ pub fn key_chord(chord: &str) -> Result<(), String> {
     run_on_main(move |enigo| {
         // Press modifiers
         for m in &modifiers {
-            enigo.key_down(*m).map_err(|e| {
+            enigo.key(*m, Direction::Press).map_err(|e| {
                 format!("Error pressing modifier key: {}", e)
             })?;
         }
         // Click final key
-        enigo.key_down(final_enigo_key).map_err(|e| {
-            format!("Error pressing key: {}", e)
-        })?;
-        enigo.key_up(final_enigo_key).map_err(|e| {
-            format!("Error releasing key: {}", e)
+        enigo.key(final_enigo_key, Direction::Click).map_err(|e| {
+            format!("Error performing key action: {}", e)
         })?;
         // Release modifiers in reverse
         for m in modifiers.iter().rev() {
-            enigo.key_up(*m).map_err(|e| {
+            enigo.key(*m, Direction::Release).map_err(|e| {
                 format!("Error releasing modifier key: {}", e)
             })?;
         }
@@ -313,13 +316,13 @@ pub fn move_mouse(x: i32, y: i32, animated: bool) -> Result<(), String> {
                 let ease = 1.0 - (1.0 - t).powi(3); // ease-out-cubic
                 let ix = cur_x as f64 + (x as f64 - cur_x as f64) * ease;
                 let iy = cur_y as f64 + (y as f64 - cur_y as f64) * ease;
-                enigo.mouse_move_to(ix as i32, iy as i32).map_err(|e| {
+                enigo.move_mouse(ix as i32, iy as i32, Coordinate::Abs).map_err(|e| {
                     format!("Error moving mouse: {}", e)
                 })?;
                 std::thread::sleep(std::time::Duration::from_millis(16));
             }
         } else {
-            enigo.mouse_move_to(x, y).map_err(|e| {
+            enigo.move_mouse(x, y, Coordinate::Abs).map_err(|e| {
                 format!("Error moving mouse: {}", e)
             })?;
         }
@@ -339,22 +342,19 @@ pub fn mouse_button(button: &str, action: &str, count: i32) -> Result<(), String
     run_on_main(move |enigo| {
         match act.as_str() {
             "press" => {
-                enigo.mouse_down(btn).map_err(|e| {
+                enigo.button(btn, Direction::Press).map_err(|e| {
                     format!("Error performing button action on attempt: {}", e)
                 })?;
             }
             "release" => {
                 // On macOS, mouse_up for Scroll buttons has no effect
-                enigo.mouse_up(btn).map_err(|e| {
+                enigo.button(btn, Direction::Release).map_err(|e| {
                     format!("Error performing button action on attempt: {}", e)
                 })?;
             }
             "click" => {
                 for _ in 0..count {
-                    enigo.mouse_down(btn).map_err(|e| {
-                        format!("Error performing button action on attempt: {}", e)
-                    })?;
-                    enigo.mouse_up(btn).map_err(|e| {
+                    enigo.button(btn, Direction::Click).map_err(|e| {
                         format!("Error performing button action on attempt: {}", e)
                     })?;
                 }
@@ -384,11 +384,11 @@ pub fn mouse_scroll(amount: i32, direction: &str) -> Result<(), String> {
 
     run_on_main(move |enigo| {
         if horiz {
-            enigo.mouse_scroll_x(amount).map_err(|e| {
+            enigo.scroll(amount, Axis::Horizontal).map_err(|e| {
                 format!("Error performing scroll action: {}", e)
             })?;
         } else {
-            enigo.mouse_scroll_y(amount).map_err(|e| {
+            enigo.scroll(amount, Axis::Vertical).map_err(|e| {
                 format!("Error performing scroll action: {}", e)
             })?;
         }
@@ -409,87 +409,70 @@ pub fn mouse_location() -> Result<(i32, i32), String> {
 /// Uses NSEvent.pressedMouseButtons which is thread-safe.
 /// Bit 0 = left, bit 1 = right, bit 2 = middle, etc.
 pub fn pressed_mouse_buttons() -> Result<i32, String> {
-    // NSEvent.pressedMouseButtons is thread-safe and returns a bitmask.
-    // Bit 0 = left, bit 1 = right, bit 2 = middle.
-    // We use core_graphics::event_source::CGEventSource which provides
-    // the same data without requiring AppKit on the main thread.
-    //
-    // Alternative: call NSEvent.pressedMouseButtons via objc2 on main thread,
-    // but CGEventSource is simpler and doesn't require main-thread dispatch.
-    run_on_main(|_enigo| {
-        // On the main thread we can safely use NSApp / NSEvent.
-        // Dispatch to main, read NSEvent.pressedMouseButtons.
-        // Since we're already in run_on_main, use a direct approach.
-        //
-        // NSEvent.pressedMouseButtons is a class method that returns the
-        // combined mouse button state as a bitmask. It works from any thread
-        // in practice, but Apple docs say main thread.
-        // We use CGEventSourceFlagsState for the actual read:
-        //   CGEventSourceFlagsState(kCGEventSourceStateCombinedSessionState,
-        //                            kCGMouseEventSubtype)
-        //
-        // Simplest: use core_graphics directly.
-        let buttons = unsafe {
-            CGEventSourceButtonState(kCGEventSourceStateCombinedSessionState)
+    let mut bitmask = 0;
+    for button in 0..32 {
+        let pressed = unsafe {
+            CGEventSourceButtonState(CG_EVENT_SOURCE_STATE_COMBINED_SESSION_STATE, button)
         };
-        Ok(buttons)
-    })
+        if pressed {
+            bitmask |= 1 << button;
+        }
+    }
+    Ok(bitmask)
 }
 
 /// Get frontmost application info from NSWorkspace.
 pub fn get_frontmost_app_info() -> Result<Option<crate::FrontmostAppInfo>, String> {
-    // NSWorkspace.frontmostApplication must be called on the main thread.
-    // We dispatch via run_on_main and extract bundleId + localizedName.
-    run_on_main(|_enigo| {
-        // Access NSWorkspace.shared.frontmostApplication via objc2 on main thread.
-        // This is safe because run_on_main dispatches to DispatchQueue.main.
-        use objc2::rc::Retained;
-        use objc2::runtime::AnyObject;
-        use objc2::msg_send;
-        use objc2_foundation::NSString;
+    let output = Command::new("osascript")
+        .arg("-e")
+        .arg(
+            r#"tell application "System Events"
+set frontApp to first application process whose frontmost is true
+set appName to name of frontApp
+set bundleId to bundle identifier of frontApp
+if bundleId is missing value then set bundleId to ""
+return bundleId & tab & appName
+end tell"#,
+        )
+        .output()
+        .map_err(|e| format!("Failed to query frontmost application: {}", e))?;
 
-        unsafe {
-            // NSWorkspace *ws = [NSWorkspace sharedWorkspace];
-            let ws_class = objc2::class!(NSWorkspace);
-            let ws: Retained<AnyObject> = msg_send![ws_class, sharedWorkspace];
+    if !output.status.success() {
+        return Ok(None);
+    }
 
-            // NSRunningApplication *app = [ws frontmostApplication];
-            let app: Option<Retained<AnyObject>> = msg_send![&ws, frontmostApplication];
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let trimmed = stdout.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
 
-            match app {
-                Some(app) => {
-                    // NSString *bid = [app bundleIdentifier];
-                    let bid_ns: Option<Retained<NSString>> = msg_send![&app, bundleIdentifier];
-                    let bundle_id = bid_ns.map(|s| s.to_string()).unwrap_or_default();
+    let mut parts = trimmed.splitn(2, '\t');
+    let bundle_id = parts.next().unwrap_or_default().to_string();
+    let app_name = parts.next().unwrap_or_default().to_string();
+    if bundle_id.is_empty() && app_name.is_empty() {
+        return Ok(None);
+    }
 
-                    // NSString *name = [app localizedName];
-                    let name_ns: Option<Retained<NSString>> = msg_send![&app, localizedName];
-                    let app_name = name_ns.map(|s| s.to_string()).unwrap_or_default();
-
-                    Ok(Some(crate::FrontmostAppInfo {
-                        bundle_id,
-                        app_name,
-                    }))
-                }
-                None => Ok(None),
-            }
-        }
-    })
+    Ok(Some(crate::FrontmostAppInfo {
+        bundle_id,
+        app_name,
+    }))
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-fn parse_mouse_button(name: &str) -> Result<enigo::MouseButton, String> {
+fn parse_mouse_button(name: &str) -> Result<Button, String> {
     match name.to_lowercase().as_str() {
-        "left" => Ok(enigo::MouseButton::Left),
-        "right" => Ok(enigo::MouseButton::Right),
-        "middle" | "center" => Ok(enigo::MouseButton::Middle),
-        "scrollup" | "forward" => Ok(enigo::MouseButton::ScrollUp),
-        "scrolldown" | "back" => Ok(enigo::MouseButton::ScrollDown),
-        "scrollleft" => Ok(enigo::MouseButton::ScrollLeft),
-        "scrollright" => Ok(enigo::MouseButton::ScrollRight),
+        "left" => Ok(Button::Left),
+        "right" => Ok(Button::Right),
+        "middle" | "center" => Ok(Button::Middle),
+        "scrollup" | "forward" => Ok(Button::ScrollUp),
+        "scrolldown" | "back" => Ok(Button::ScrollDown),
+        "scrollleft" => Ok(Button::ScrollLeft),
+        "scrollright" => Ok(Button::ScrollRight),
         _ => Err(format!(
             "Invalid button name: {}. Valid options are: left, right, middle, scrollUp, scrollDown, scrollLeft, scrollRight",
             name
@@ -500,17 +483,15 @@ fn parse_mouse_button(name: &str) -> Result<enigo::MouseButton, String> {
 /// Read current mouse position via CGEvent.
 fn current_mouse_position(_enigo: &Enigo) -> (i32, i32) {
     // Read cursor position via CGEventCreate on the combined session state.
-    // CGEvent::new(nil) works for reading the current mouse location.
-    unsafe {
-        let event = core_graphics::event::CGEvent::new(None);
-        match event {
-            Some(e) => {
-                let p = e.location();
-                // CGEvent location is in global display coordinates (origin top-left
-                // of primary display for CGDirectDisplay coordinates on macOS).
-                (p.x as i32, p.y as i32)
-            }
-            None => (0, 0),
+    let source = core_graphics::event_source::CGEventSource::new(
+        core_graphics::event_source::CGEventSourceStateID::CombinedSessionState,
+    );
+    match source.and_then(core_graphics::event::CGEvent::new) {
+        Ok(e) => {
+            let p = e.location();
+            // CGEvent location is in global display coordinates.
+            (p.x as i32, p.y as i32)
         }
+        Err(_) => (0, 0),
     }
 }

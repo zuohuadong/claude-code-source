@@ -47,13 +47,13 @@ export function getTerminalBundleId(): string | null {
 }
 
 /**
- * Static capabilities for macOS CLI. `hostBundleId` is not here — it's added
+ * Static capabilities for CLI computer use. `hostBundleId` is not here — it's added
  * by `executor.ts` per `ComputerExecutor.capabilities`. `buildComputerUseTools`
  * takes this shape (no `hostBundleId`, no `teachMode`).
  */
 export const CLI_CU_CAPABILITIES = {
-  screenshotFiltering: 'native' as const,
-  platform: 'darwin' as const,
+  screenshotFiltering: process.platform === 'darwin' ? 'native' as const : 'none' as const,
+  platform: process.platform === 'win32' ? 'win32' as const : 'darwin' as const,
 }
 
 export function isComputerUseMCPServer(name: string): boolean {

@@ -6,8 +6,7 @@ NAPI-RS keyboard/mouse input backend for Computer Use.
 
 ```
 Node.js / Bun
-  -> js/index.js (platform detection + native loader)
-  -> src/index.ts (cross-platform loader)
+  -> src/index.ts (platform detection + native loader)
      -> src/backends/darwin.ts (native .node addon)
      -> src/backends/win32.ts (PowerShell + Win32 P/Invoke)
 ```
@@ -47,7 +46,6 @@ of the haking-code- POC.
 ## Building from source (macOS)
 
 ```bash
-cd src/
 cargo build --release
 # Output: target/release/libcomputer_use_input.dylib -> rename to .node
 ```

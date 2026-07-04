@@ -13,8 +13,12 @@
  */
 
 import type { SwiftBackend } from '../types.js'
+import path from 'path'
 
-const native = require('../../js/index.js')
+const native = require(
+  process.env.COMPUTER_USE_SWIFT_NODE_PATH ??
+    path.resolve(import.meta.dir, '../../prebuilds/computer_use.node'),
+).computerUse
 
 export const screenshot: SwiftBackend['screenshot'] = async (opts) => {
   return await native.screenshot(opts)

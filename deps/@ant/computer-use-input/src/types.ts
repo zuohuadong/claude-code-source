@@ -19,7 +19,7 @@ export interface InputBackend {
   /** Move cursor to (x, y). Animated uses ease-out interpolation. */
   moveMouse(x: number, y: number, animated?: boolean): Promise<void>
   /** Press, release, or click a single key. */
-  key(key: string, action: 'press' | 'release'): Promise<void>
+  key(key: string, action?: 'click' | 'press' | 'release'): Promise<void>
   /** Press a key chord (e.g. ["cmd", "c"]). */
   keys(parts: string[]): Promise<void>
   /** Get current cursor position. */

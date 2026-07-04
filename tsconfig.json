@@ -11,6 +11,7 @@
     "skipLibCheck": true,
     "strict": false,
     "noEmit": true,
+    "ignoreDeprecations": "6.0",
     "types": [
       "bun-types"
     ],
@@ -32,10 +33,10 @@
         "./deps/@ant/computer-use-mcp/src/sentinelApps.ts"
       ],
       "@ant/computer-use-input": [
-        "./deps/@ant/computer-use-input/js/index.js"
+        "./deps/@ant/computer-use-input/src/index.ts"
       ],
       "@ant/computer-use-swift": [
-        "./deps/@ant/computer-use-swift/js/index.js"
+        "./deps/@ant/computer-use-swift/src/index.ts"
       ],
       "audio-capture-napi": [
         "./vendor/audio-capture-src/index.ts"

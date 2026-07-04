@@ -11,6 +11,11 @@
 
 import type { InputBackend } from './types.js'
 
+export type ComputerUseInputAPI = InputBackend
+export type ComputerUseInput =
+  | { isSupported: false }
+  | ({ isSupported: true } & ComputerUseInputAPI)
+
 let backend: InputBackend | null = null
 
 function loadBackend(): InputBackend {
@@ -53,5 +58,18 @@ export const {
   typeText,
   getFrontmostAppInfo,
 } = loadBackend()
+
+export default {
+  isSupported,
+  getBackend,
+  moveMouse,
+  key,
+  keys,
+  mouseLocation,
+  mouseButton,
+  mouseScroll,
+  typeText,
+  getFrontmostAppInfo,
+}
 
 export type { InputBackend, FrontmostAppInfo } from './types.js'
