@@ -2,7 +2,7 @@
 name = "computer-use-input"
 version = "0.1.0"
 edition = "2021"
-description = "NAPI-RS keyboard/mouse input via enigo (cross-platform: macOS + Windows)"
+description = "NAPI-RS keyboard/mouse input (macOS: enigo + CGEvent, Windows: direct SendInput)"
 license = "MIT"
 
 [lib]
@@ -11,14 +11,16 @@ crate-type = ["cdylib"]
 [dependencies]
 napi = { version = "2.16", features = ["tokio_rt", "async"] }
 napi-derive = "2"
-enigo = "0.6"
 tokio = { version = "1", features = ["full"] }
 once_cell = "1"
 
+# macOS: enigo for CGEventPost input simulation
 [target.'cfg(target_os = "macos")'.dependencies]
+enigo = "0.6"
 dispatch2 = "0.3"
 core-graphics = "0.25"
 
+# Windows: direct Win32 SendInput (no enigo dependency)
 [target.'cfg(target_os = "windows")'.dependencies]
 windows = { version = "0.58", features = [
     "Win32_Foundation",

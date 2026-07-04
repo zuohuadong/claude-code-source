@@ -52,6 +52,9 @@
       ],
       "color-diff-napi": [
         "./src/native-ts/color-diff/index.ts"
+      ],
+      "@ant/computer-use-native": [
+        "./deps/@ant/computer-use-native/index.ts"
       ]
     }
   },

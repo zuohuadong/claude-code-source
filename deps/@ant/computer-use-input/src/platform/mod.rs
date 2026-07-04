@@ -4,7 +4,9 @@
 //! from tokio worker to DispatchQueue.main. Under libuv, the caller must pump
 //! CFRunLoop via _drainMainRunLoop.
 //!
-//! Windows: SendInput is thread-safe, no dispatch needed. enigo calls go direct.
+//! Windows: direct SendInput calls (no enigo). SendInput is thread-safe, no
+//! dispatch needed. Mouse uses MOUSEEVENTF_ABSOLUTE with 0-65535 normalization.
+//! Keyboard uses VK_* virtual keys. Text entry uses KEYEVENTF_UNICODE.
 
 #[cfg(target_os = "macos")]
 #[path = "macos.rs"]

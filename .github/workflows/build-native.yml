@@ -6,14 +6,101 @@ on:
     paths:
       - 'deps/@ant/computer-use-input/**'
       - 'deps/@ant/computer-use-swift/**'
+      - 'deps/@ant/computer-use-native/**'
       - '.github/workflows/build-native.yml'
   pull_request:
     branches: [main]
     paths:
       - 'deps/@ant/computer-use-input/**'
       - 'deps/@ant/computer-use-swift/**'
+      - 'deps/@ant/computer-use-native/**'
 
 jobs:
+  build-native:
+    name: computer-use-native (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            label: arm64-darwin
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            label: x64-darwin
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            label: x64-msvc
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            label: x64-linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Install Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libx11-dev libxtst-dev libxrandr-dev
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            deps/@ant/computer-use-native/target
+          key: cargo-native-${{ matrix.target }}-${{ hashFiles('deps/@ant/computer-use-native/Cargo.toml') }}
+
+      - name: Build (cargo check)
+        working-directory: deps/@ant/computer-use-native
+        run: cargo check --target ${{ matrix.target }}
+
+      - name: Build release
+        working-directory: deps/@ant/computer-use-native
+        run: cargo build --release --target ${{ matrix.target }}
+
+      - name: Stage artifact (macOS)
+        if: runner.os == 'macOS'
+        working-directory: deps/@ant/computer-use-native
+        run: |
+          mkdir -p prebuilds/${{ matrix.label }}
+          cp target/${{ matrix.target }}/release/libcomputer_use_native.dylib prebuilds/${{ matrix.label }}/computer-use-native.node
+
+      - name: Stage artifact (Windows)
+        if: runner.os == 'Windows'
+        working-directory: deps/@ant/computer-use-native
+        shell: bash
+        run: |
+          mkdir -p prebuilds/${{ matrix.label }}
+          cp target/${{ matrix.target }}/release/computer_use_native.dll prebuilds/${{ matrix.label }}/computer-use-native.node
+
+      - name: Stage artifact (Linux)
+        if: runner.os == 'Linux'
+        working-directory: deps/@ant/computer-use-native
+        run: |
+          mkdir -p prebuilds/${{ matrix.label }}
+          cp target/${{ matrix.target }}/release/libcomputer_use_native.so prebuilds/${{ matrix.label }}/computer-use-native.node
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: computer-use-native-${{ matrix.label }}
+          path: deps/@ant/computer-use-native/prebuilds/${{ matrix.label }}/computer-use-native.node
+          if-no-files-found: error
+
   build-input:
     name: computer-use-input (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
@@ -23,13 +110,13 @@ jobs:
         include:
           - os: macos-latest
             target: aarch64-apple-darwin
-            artifact: computer-use-input.node
+            label: arm64-darwin
           - os: macos-latest
             target: x86_64-apple-darwin
-            artifact: computer-use-input.node
+            label: x64-darwin
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            artifact: computer_use_input.dll
+            label: x64-msvc
 
     steps:
       - uses: actions/checkout@v4
@@ -53,7 +140,7 @@ jobs:
             deps/@ant/computer-use-input/target
           key: cargo-input-${{ matrix.target }}-${{ hashFiles('deps/@ant/computer-use-input/Cargo.toml') }}
 
-      - name: Build (cargo check on current platform)
+      - name: Build (cargo check)
         working-directory: deps/@ant/computer-use-input
         run: cargo check --target ${{ matrix.target }}
 
@@ -65,37 +152,35 @@ jobs:
         if: runner.os == 'macOS'
         working-directory: deps/@ant/computer-use-input
         run: |
-          mkdir -p prebuilds/${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/libcomputer_use_input.dylib prebuilds/${{ matrix.target }}/computer-use-input.node
-          echo "ARTIFACT_PATH=prebuilds/${{ matrix.target }}/computer-use-input.node" >> $GITHUB_ENV
+          mkdir -p prebuilds/${{ matrix.label }}
+          cp target/${{ matrix.target }}/release/libcomputer_use_input.dylib prebuilds/${{ matrix.label }}/computer-use-input.node
 
       - name: Stage artifact (Windows)
         if: runner.os == 'Windows'
         working-directory: deps/@ant/computer-use-input
         shell: bash
         run: |
-          mkdir -p prebuilds/${{ matrix.target }}
-          cp target/${{ matrix.target }}/release/computer_use_input.dll prebuilds/${{ matrix.target }}/computer-use-input.node
-          echo "ARTIFACT_PATH=prebuilds/${{ matrix.target }}/computer-use-input.node" >> $GITHUB_ENV
+          mkdir -p prebuilds/${{ matrix.label }}
+          cp target/${{ matrix.target }}/release/computer_use_input.dll prebuilds/${{ matrix.label }}/computer-use-input.node
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: computer-use-input-${{ matrix.target }}
-          path: deps/@ant/computer-use-input/prebuilds/${{ matrix.target }}/computer-use-input.node
+          name: computer-use-input-${{ matrix.label }}
+          path: deps/@ant/computer-use-input/prebuilds/${{ matrix.label }}/computer-use-input.node
           if-no-files-found: error
 
-  build-swift:
-    name: computer-use-swift (macOS only)
-    runs-on: macos-latest
+  verify-typescript:
+    name: TypeScript compilation check
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
-      - name: Build Swift package
-        working-directory: deps/@ant/computer-use-swift
-        run: swift build
+      - name: Install Bun
+        uses: oven-sh/setup-bun@v2
 
-      - name: Verify TypeScript compilation
-        run: |
-          bun install --silent
-          bunx tsc --noEmit --pretty false 2>&1 | grep -i "computer-use" || echo "No computer-use TS errors"
+      - name: Install deps
+        run: bun install --silent
+
+      - name: TypeScript check
+        run: bunx tsc --noEmit --pretty false 2>&1 | grep -i "computer-use" || echo "No computer-use TS errors"

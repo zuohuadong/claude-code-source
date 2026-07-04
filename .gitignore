@@ -2,3 +2,11 @@ node_modules/
 .DS_Store
 *.log
 .claude-dev/
+
+# Rust build artifacts
+**/target/
+**/Cargo.lock
+
+# Native addon prebuilds (built via CI)
+**/prebuilds/*.node
+**/prebuilds/**/*.node
