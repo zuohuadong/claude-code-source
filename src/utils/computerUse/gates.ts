@@ -9,12 +9,10 @@ import { isEnvTruthy } from '../envUtils.js'
 const COMPUTER_USE_PLUGIN_ID = `computer-use@${BUILTIN_MARKETPLACE_NAME}`
 
 type ChicagoConfig = CuSubGates & {
-  enabled: boolean
   coordinateMode: CoordinateMode
 }
 
 const DEFAULTS: ChicagoConfig = {
-  enabled: false,
   pixelValidation: false,
   clipboardPasteMultiline: true,
   mouseAnimation: true,
@@ -51,7 +49,7 @@ function hasRequiredSubscription(): boolean {
  *
  * Returns:
  *   - true/false when the user has explicitly toggled the plugin via /plugin
- *   - undefined when no preference is set (caller falls through to GB + sub)
+ *   - undefined when no preference is set (built-in plugin default applies)
  */
 function getPluginEnabledPreference(): boolean | undefined {
   const settings = getSettings_DEPRECATED()
@@ -67,13 +65,12 @@ function getPluginEnabledPreference(): boolean | undefined {
 
 /**
  * Computer Use is enabled when BOTH conditions hold:
- *   1. The /plugin toggle is on (user preference, or GrowthBook fallback)
+ *   1. The /plugin toggle is explicitly on
  *   2. The subscription tier allows it (Max/Pro, or ant bypass)
  *
- * The plugin toggle takes priority: if the user has explicitly enabled or
- * disabled Computer Use via /plugin, that wins. Otherwise we fall back to the
- * GrowthBook gate + subscription check for backward compatibility with
- * existing dogfooding rollouts.
+ * GrowthBook still supplies sub-gates and coordinate-mode config, but it must
+ * not enable CU by itself. Otherwise the /plugin UI can show the built-in
+ * plugin as disabled while the runtime starts the MCP server anyway.
  */
 export function getChicagoEnabled(): boolean {
   // Disable for ants whose shell inherited monorepo dev config.
@@ -89,17 +86,11 @@ export function getChicagoEnabled(): boolean {
     return false
   }
 
-  // Plugin toggle takes priority over GrowthBook
-  const pluginPref = getPluginEnabledPreference()
-  if (pluginPref !== undefined) {
-    return pluginPref
-  }
-
-  return readConfig().enabled
+  return getPluginEnabledPreference() === true
 }
 
 export function getChicagoSubGates(): CuSubGates {
-  const { enabled: _e, coordinateMode: _c, ...subGates } = readConfig()
+  const { coordinateMode: _c, ...subGates } = readConfig()
   return subGates
 }
 
